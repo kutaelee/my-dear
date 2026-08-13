@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "supertonic-3-int8-ko",
+  "provider": "Supertone",
+  "revision": "REPLACE_WITH_IMMUTABLE_COMMIT",
+  "format": "onnx",
+  "quantization": "int8",
+  "files": [],
+  "licenseUrl": "https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE",
+  "minimumAppVersion": "0.1.0",
+  "status": "template-not-installable"
+}

@@ -1,0 +1,13 @@
+.gradle/
+.idea/
+.kotlin/
+**/build/
+local.properties
+*.iml
+captures/
+*.jks
+*.keystore
+.env*
+!*.env.example
+design/prototype/node_modules/
+design/prototype/dist/

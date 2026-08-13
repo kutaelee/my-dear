@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "gemma-4-e2b-it-mobile",
+  "provider": "litert-community",
+  "revision": "REPLACE_WITH_IMMUTABLE_COMMIT",
+  "format": "litertlm",
+  "quantization": "targeted-mixed-2-4-8-bit",
+  "files": [],
+  "licenseUrl": "https://ai.google.dev/gemma/terms",
+  "minimumAppVersion": "0.1.0",
+  "status": "template-not-installable"
+}

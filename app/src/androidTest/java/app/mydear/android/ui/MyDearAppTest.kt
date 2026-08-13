@@ -1,6 +1,8 @@
 package app.mydear.android.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -10,6 +12,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTextInput
 import androidx.test.platform.app.InstrumentationRegistry
 import app.mydear.android.MainActivity
@@ -28,6 +31,16 @@ class MyDearAppTest {
             .edit()
             .clear()
             .commit()
+        context
+            .getSharedPreferences(InternetPreferenceStore.FILE_NAME, 0)
+            .edit()
+            .clear()
+            .commit()
+        context
+            .getSharedPreferences(SeniorUiPreferenceStore.FILE_NAME, 0)
+            .edit()
+            .clear()
+            .commit()
         context.filesDir.resolve("private-chat").deleteRecursively()
         context.filesDir.resolve("models/active-gemma-4-e2b-it-mobile.txt").delete()
         context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm").delete()
@@ -35,7 +48,10 @@ class MyDearAppTest {
         rule.waitForIdle()
     }
 
-    private fun skipTutorial() = rule.onNodeWithText("건너뛰기").performClick()
+    private fun skipTutorial() {
+        rule.onNodeWithText("건너뛰기").performClick()
+        rule.onNodeWithText("동의하고 켜기").performClick()
+    }
 
     @Test fun primaryNavigationHasExactlyThreeVisibleDestinations() {
         skipTutorial()
@@ -83,6 +99,25 @@ class MyDearAppTest {
         assertEquals(0, rule.onAllNodesWithText("MTP", substring = true).fetchSemanticsNodes().size)
         assertEquals(0, rule.onAllNodesWithText("E2B", substring = true).fetchSemanticsNodes().size)
         assertEquals(0, rule.onAllNodesWithText("E4B", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun internetHelpIsOnByDefaultAndCanBeTurnedOff() {
+        skipTutorial()
+        rule.onNodeWithContentDescription("인터넷 도움").assertIsDisplayed()
+        rule.onNodeWithTag("internet-toggle").assertIsOn().performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("internet-toggle").assertIsOff()
+    }
+
+    @Test fun largeTextUsesSwitchInsteadOfNavigationArrow() {
+        skipTutorial()
+        rule.onNodeWithText("설정").performClick()
+        rule.onNodeWithTag("settings-list").performScrollToNode(hasTestTag("large-text-toggle"))
+        rule.onNodeWithContentDescription("큰 글자").assertIsDisplayed()
+        rule.onNodeWithTag("large-text-toggle").assertIsOff().performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("settings-list").performScrollToNode(hasTestTag("large-text-toggle"))
+        rule.onNodeWithTag("large-text-toggle").assertIsOn()
     }
 
     @Test fun externalPhoneActionRequiresExplicitConfirmation() {

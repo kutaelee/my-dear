@@ -18,6 +18,9 @@ import app.mydear.android.runtime.audio.AudioTrackPcmOutput
 import app.mydear.android.runtime.litert.LiteRtConversationEngine
 import app.mydear.android.runtime.sherpa.SupertonicTtsEngine
 import app.mydear.android.runtime.search.HttpsSearchProxyGateway
+import app.mydear.android.runtime.search.InternetSearchException
+import app.mydear.android.runtime.search.PublicInternetSearchGateway
+import app.mydear.android.search.InternetQueryPolicy
 import app.mydear.android.BuildConfig
 import app.mydear.android.models.GemmaTier
 import app.mydear.android.models.InstalledModelResolver
@@ -65,7 +68,7 @@ data class ChatUiState(
     val modelDownloadProgress: Int = 0,
     val isDownloadingTts: Boolean = false,
     val ttsDownloadProgress: Int = 0,
-    val useWebSearch: Boolean = false,
+    val useWebSearch: Boolean = true,
     val searchConfigured: Boolean = false,
     val pendingTool: ToolProposal? = null,
 )
@@ -79,17 +82,21 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     private val tts = SupertonicTtsEngine()
     private val audioOutput = AudioTrackPcmOutput()
     private val initialTier = modelPreferences.selectedTier()
-    private val searchGateway = BuildConfig.SEARCH_ENDPOINT.toHttpUrlOrNull()?.let(::HttpsSearchProxyGateway)
+    private val internetPreferences = InternetPreferenceStore(application)
+    private val configuredSearchGateway = BuildConfig.SEARCH_ENDPOINT.toHttpUrlOrNull()?.let(::HttpsSearchProxyGateway)
+    private val searchGateway = configuredSearchGateway ?: PublicInternetSearchGateway()
     private val mutableState = MutableStateFlow(
         ChatUiState(
             selectedModelTier = initialTier,
             modelInstalled = modelResolver.resolveGemma(initialTier) != null,
             ttsInstalled = modelResolver.resolveSupertonic() != null,
-            searchConfigured = searchGateway != null,
+            useWebSearch = internetPreferences.isEnabled() && internetPreferences.hasSavedChoice(),
+            searchConfigured = true,
             messages = chatStore.load(),
         ),
     )
     val state: StateFlow<ChatUiState> = mutableState.asStateFlow()
+    val needsInternetConsent: Boolean get() = !internetPreferences.hasSavedChoice()
     private var listeningJob: Job? = null
     private var answerJob: Job? = null
     private var modelDownloadJob: Job? = null
@@ -113,9 +120,14 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateDraft(value: String) = mutableState.update { it.copy(draft = value.take(4_000), notice = null) }
 
-    fun setWebSearch(enabled: Boolean) = mutableState.update {
-        if (enabled && searchGateway == null) it.copy(useWebSearch = false, notice = "검색 서버가 아직 연결되지 않았어요")
-        else it.copy(useWebSearch = enabled, notice = if (enabled) "웹 검색을 사용할게요" else null)
+    fun setWebSearch(enabled: Boolean) {
+        internetPreferences.setEnabled(enabled)
+        mutableState.update {
+            it.copy(
+                useWebSearch = enabled,
+                notice = if (enabled) "최신 정보가 필요할 때 인터넷에서 확인할게요" else "인터넷 도움을 껐어요",
+            )
+        }
     }
 
     fun consumeTool(message: String? = null) = mutableState.update {
@@ -412,7 +424,8 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }
                 if (activeTurnId != turnId) return@launch
-                var answer = state.value.messages.firstOrNull { it.id == assistantId }?.text.orEmpty()
+                var answer = cleanAssistantAnswer(state.value.messages.firstOrNull { it.id == assistantId }?.text.orEmpty())
+                replaceAssistantText(assistantId, answer)
                 if (evidence != null && !markWebProvenance(assistantId, evidence, answer)) {
                     answer = "검색 자료를 확인했지만 출처를 정확히 연결하지 못했어요. 다른 표현으로 다시 검색해 주세요."
                     replaceAssistantText(assistantId, answer)
@@ -421,8 +434,10 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 else finishAnswer(turnId)
             } catch (error: Exception) {
                 if (activeTurnId == turnId) {
-                    replaceAssistantText(assistantId, "답변을 만들지 못했어요. 모델을 다시 준비한 뒤 시도해 주세요.")
-                    mutableState.update { it.copy(notice = error.message?.take(160), isGenerating = false, voiceState = VoiceState.Failed("답변 생성 실패")) }
+                    val userMessage = if (error is InternetSearchException) error.message.orEmpty()
+                    else "답변을 만들지 못했어요. 모델을 다시 준비한 뒤 시도해 주세요."
+                    replaceAssistantText(assistantId, userMessage)
+                    mutableState.update { it.copy(notice = null, isGenerating = false, voiceState = VoiceState.Failed(userMessage)) }
                     activeTurnId = null
                 }
             }
@@ -430,18 +445,34 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private suspend fun loadSearchEvidenceIfRequested(query: String): SearchEvidence? {
-        if (!state.value.useWebSearch) return null
-        val gateway = searchGateway ?: throw IllegalStateException("검색 서버가 아직 연결되지 않았어요")
+        val requiresFreshness = InternetQueryPolicy.requiresFreshness(query)
+        if (!state.value.useWebSearch) {
+            if (requiresFreshness) throw InternetSearchException("바뀔 수 있는 정보라 인터넷 확인이 필요해요. 위의 ‘인터넷 도움’을 켜고 다시 물어봐 주세요.")
+            return null
+        }
+        if (InternetQueryPolicy.isUnsupportedByPublicFallback(query) && configuredSearchGateway == null) {
+            throw InternetSearchException("이 최신 정보는 아직 무료 인터넷 도움에서 정확히 확인할 수 없어요. 추측해서 답하지 않을게요.")
+        }
+        if (!InternetQueryPolicy.shouldUseInternet(query, configuredSearchGateway != null)) return null
         mutableState.update { it.copy(notice = "인터넷에서 최신 자료를 찾고 있어요") }
-        return gateway.search(SearchRequest(query)).getOrElse { throw IllegalStateException(it.message ?: "검색하지 못했어요") }
+        return searchGateway.search(SearchRequest(query)).getOrElse {
+            throw if (it is InternetSearchException) it else InternetSearchException("인터넷 정보를 가져오지 못했어요. 연결을 확인하고 다시 시도해 주세요.")
+        }
     }
+
+    private fun cleanAssistantAnswer(value: String): String = value
+        .replace("**", "")
+        .replace(Regex("(?m)^#{1,6}\\s*"), "")
+        .replace(Regex("[😊🙂😉😀😃😄😁👍🙏]"), "")
+        .replace(Regex("[ \\t]+\\n"), "\n")
+        .trim()
 
     private fun markWebProvenance(messageId: String, evidence: SearchEvidence, answer: String): Boolean {
         val referenced = Regex("\\[자료\\s+(\\d+)]").findAll(answer)
             .mapNotNull { it.groupValues[1].toIntOrNull()?.minus(1) }
             .distinct()
             .toList()
-        if (referenced.isEmpty() || referenced.any { it !in evidence.documents.indices }) return false
+        if (referenced.isEmpty() || referenced.any { it !in evidence.documents.indices } || !allFactualSentencesAreCited(answer)) return false
         mutableState.update { current ->
         val sources = referenced.map { evidence.documents[it] }.map { source ->
             app.mydear.android.domain.SearchSource(source.title, source.host, source.url, source.publishedAt)
@@ -454,6 +485,12 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
         return true
     }
+
+    private fun allFactualSentencesAreCited(answer: String): Boolean = answer
+        .split(Regex("(?<=[.!?요다])\\s+(?!\\[자료)|\\n+"))
+        .map(String::trim)
+        .filter { it.length >= 6 }
+        .all { Regex("\\[자료\\s+\\d+]").containsMatchIn(it) }
 
     private suspend fun speakAnswer(turnId: TurnId, text: String) {
         val ttsModel = modelResolver.resolveSupertonic()

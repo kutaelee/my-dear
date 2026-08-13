@@ -46,4 +46,20 @@ class HttpsSearchProxyGatewayTest {
         try { assertTrue(HttpsSearchProxyGateway(server.url("/v1/search"), client).search(SearchRequest("날씨")).isFailure) }
         finally { server.close() }
     }
+
+    @Test fun `display host is derived from verified source url`() = runBlocking {
+        val certificate = HeldCertificate.Builder().commonName("localhost").addSubjectAlternativeName("localhost").build()
+        val serverCertificates = HandshakeCertificates.Builder().heldCertificate(certificate).build()
+        val clientCertificates = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
+        val server = MockWebServer().apply {
+            useHttps(serverCertificates.sslSocketFactory())
+            enqueue(MockResponse.Builder().code(200).body("""{"results":[{"title":"자료","host":"weather.go.kr","url":"https://example.com/fact","snippet":"내용"}]}""").build())
+            start()
+        }
+        val client = OkHttpClient.Builder().sslSocketFactory(clientCertificates.sslSocketFactory(), clientCertificates.trustManager).followRedirects(false).build()
+        try {
+            val document = HttpsSearchProxyGateway(server.url("/v1/search"), client).search(SearchRequest("질문")).getOrThrow().documents.single()
+            assertEquals("example.com", document.host)
+        } finally { server.close() }
+    }
 }

@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -88,6 +89,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.Role as SemanticsRole
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -123,7 +127,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     val uiPreferences = remember(context) { SeniorUiPreferenceStore(context) }
     var tabName by rememberSaveable { mutableStateOf(MainTab.Chat.name) }
     var showTutorial by remember { mutableStateOf(!onboardingStore.isCompleted()) }
-    var showSearchDisclosure by rememberSaveable { mutableStateOf(false) }
+    var showSearchDisclosure by rememberSaveable { mutableStateOf(chatViewModel.needsInternetConsent && onboardingStore.isCompleted()) }
     var largeText by rememberSaveable { mutableStateOf(uiPreferences.largeText()) }
     val tab = MainTab.valueOf(tabName)
     val chatState by chatViewModel.state.collectAsState()
@@ -260,11 +264,12 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (showTutorial) TutorialDialog(onClose = {
         onboardingStore.markCompleted()
         showTutorial = false
+        if (chatViewModel.needsInternetConsent) showSearchDisclosure = true
     })
     if (showSearchDisclosure) AlertDialog(
         onDismissRequest = { showSearchDisclosure = false },
-        title = { Text("웹 검색 전 확인") },
-        text = { Text("웹 검색을 켜면 현재 질문 내용이 인터넷 검색을 위해 전송됩니다. 음성 녹음과 이전 대화는 보내지 않아요. 이름, 주소, 전화번호 같은 개인정보는 질문에 쓰지 마세요.") },
+        title = { Text("인터넷 도움 켜기") },
+        text = { Text("날씨나 최신 정보가 필요한 질문만 인터넷으로 확인해요. 현재 질문만 보내고, 음성 녹음과 이전 대화는 보내지 않아요. 이름, 주소, 전화번호는 질문에 쓰지 마세요.") },
         dismissButton = { OutlinedButton(onClick = { showSearchDisclosure = false }) { Text("취소") } },
         confirmButton = { Button(onClick = { showSearchDisclosure = false; chatViewModel.setWebSearch(true) }) { Text("동의하고 켜기") } },
     )
@@ -311,6 +316,12 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         }
     }
     Column(Modifier.fillMaxSize().padding(padding)) {
+        InternetHelpCard(
+            enabled = state.searchConfigured,
+            checked = state.useWebSearch,
+            onCheckedChange = onWebSearchChanged,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -324,32 +335,13 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                         Text("글로 묻거나 마이크를 눌러 말해보세요.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
                     }
                 }
+            }
+            if (state.messages.isEmpty()) {
                 item {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         item { QuickAction(Icons.Outlined.WbSunny, "오늘 날씨") { onQuickPrompt("오늘 날씨 알려줘") } }
                         item { QuickAction(Icons.Outlined.Phone, "전화 걸기") { onQuickPrompt("가족에게 전화하기") } }
                         item { QuickAction(Icons.Outlined.Alarm, "알람 맞추기") { onQuickPrompt("약 먹을 시간 기억해줘") } }
-                    }
-                }
-            }
-            item {
-                Surface(color = Color(0xFFF6F2EF), shape = RoundedCornerShape(14.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Outlined.Lock, contentDescription = null, tint = Color(0xFF6B625D), modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("휴대폰 안에서", fontSize = 13.sp, color = Color(0xFF6B625D), modifier = Modifier.weight(1f))
-                        Icon(Icons.Outlined.Cloud, contentDescription = null, tint = if (state.searchConfigured) Coral else Color(0xFF9C9490), modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("웹 검색", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Switch(
-                            checked = state.useWebSearch,
-                            onCheckedChange = onWebSearchChanged,
-                            enabled = state.searchConfigured,
-                            modifier = Modifier.size(width = 48.dp, height = 32.dp),
-                        )
                     }
                 }
             }
@@ -404,6 +396,47 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     onClick = onSend,
                     modifier = Modifier.size(50.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
                 ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "메시지 보내기", tint = Coral) }
+            }
+        }
+    }
+}
+
+@Composable private fun InternetHelpCard(
+    enabled: Boolean,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(modifier = modifier.fillMaxWidth(), color = Color(0xFFF6F2EF), shape = RoundedCornerShape(14.dp)) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Lock, contentDescription = null, tint = Color(0xFF6B625D), modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("대화와 음성은 휴대폰 안에서 처리해요", fontSize = 13.sp, color = Color(0xFF6B625D))
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) { contentDescription = "인터넷 도움" }
+                    .toggleable(value = checked, enabled = enabled, role = SemanticsRole.Switch, onValueChange = onCheckedChange)
+                    .testTag("internet-toggle"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Cloud, contentDescription = null, tint = Coral, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("인터넷 도움", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("날씨·최신 정보가 필요할 때만 확인", fontSize = 12.sp, color = Color(0xFF6B625D))
+                }
+                Switch(
+                    checked = checked,
+                    onCheckedChange = null,
+                    enabled = enabled,
+                    modifier = Modifier.clearAndSetSemantics { },
+                )
             }
         }
     }
@@ -466,10 +499,10 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
             }
         }
         if (expandedPlans) item { PlanComparison() }
-        item { SettingRow("글자 크기", if (largeText) "크게" else "보통") { onLargeTextChange(!largeText) } }
+        item { SettingToggleRow("큰 글자", "화면의 글자를 조금 더 크게 표시", largeText, onLargeTextChange) }
         item { SettingRow("목소리 속도", "곧 사용할 수 있어요", enabled = false) }
         item { SettingRow("사용법 다시 보기", "4단계 안내", onClick = onShowTutorial) }
-        item { SettingRow("개인정보와 인터넷 검색", "전송 범위 확인") { showPrivacy = true } }
+        item { SettingRow("개인정보와 인터넷 도움", "어떤 정보가 전송되는지 확인") { showPrivacy = true } }
         item {
             Column(
                 Modifier.fillMaxWidth().border(1.dp, Color(0xFFE3D6CF), RoundedCornerShape(20.dp)).padding(18.dp),
@@ -539,7 +572,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (showPrivacy) AlertDialog(
         onDismissRequest = { showPrivacy = false },
         title = { Text("개인정보와 검색") },
-        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 웹 검색을 켜면 현재 질문 내용만 인터넷 검색을 위해 전송됩니다. 음성 녹음과 이전 대화는 보내지 않아요.") },
+        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 인터넷 도움을 켜면 날씨나 최신 정보가 필요한 현재 질문만 인터넷으로 전송해요. 음성 녹음과 이전 대화는 보내지 않아요.") },
         confirmButton = { Button(onClick = { showPrivacy = false }) { Text("확인") } },
     )
 }
@@ -547,7 +580,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
 @Composable private fun PlanComparison() {
     Column(Modifier.fillMaxWidth().border(2.dp, Coral, RoundedCornerShape(20.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("무료 · 0원", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Text("오프라인 채팅과 음성 · 기본 웹 검색", style = MaterialTheme.typography.bodyMedium)
+        Text("오프라인 채팅과 음성 · 기본 인터넷 도움", style = MaterialTheme.typography.bodyMedium)
         HorizontalDivider()
         Text("내새끼 플러스 · 월 3,900원 예정", color = Coral, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("더 많은 웹 검색 · 온라인 고급 AI 답변 · 가족 기능은 추후 제공", style = MaterialTheme.typography.bodyMedium)
@@ -563,13 +596,42 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     }
 }
 
+@Composable private fun SettingToggleRow(title: String, value: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE3D6CF)),
+        color = Color.Transparent,
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .semantics(mergeDescendants = true) { contentDescription = "큰 글자" }
+                .toggleable(value = checked, role = SemanticsRole.Switch, onValueChange = onCheckedChange)
+                .testTag("large-text-toggle")
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(value, fontSize = 15.sp)
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = null,
+                modifier = Modifier.clearAndSetSemantics { },
+            )
+        }
+    }
+}
+
 @Composable private fun TutorialDialog(onClose: () -> Unit) {
     var step by rememberSaveable { mutableIntStateOf(1) }
-    val titles = listOf("글이나 말로 물어보세요", "답변 중에도 다시 말할 수 있어요", "웹 검색은 선택할 수 있어요", "나에게 편하게 맞춰보세요")
+    val titles = listOf("글이나 말로 물어보세요", "답변 중에도 다시 말할 수 있어요", "최신 정보는 인터넷으로 확인해요", "나에게 편하게 맞춰보세요")
     val bodies = listOf(
         "아래 입력창에 메시지를 쓰거나 왼쪽 마이크 버튼을 눌러 말해보세요.",
         "내새끼가 읽는 중에도 마이크를 누르면 답변을 멈추고 새 질문을 들을게요.",
-        "평소 대화는 휴대폰 안에서 처리해요. 최신 정보가 필요할 때만 웹 검색을 켜고, 현재 질문 내용만 인터넷 검색에 사용해요.",
+        "인터넷 도움은 처음부터 켜져 있어요. 날씨나 최신 정보가 필요한 질문만 인터넷으로 확인하고, 현재 질문만 보내요. 채팅 화면에서 언제든 끌 수 있어요.",
         "설정에서 글자 크기를 언제든 바꿀 수 있어요.",
     )
     Dialog(onDismissRequest = onClose) {

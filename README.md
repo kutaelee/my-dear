@@ -28,7 +28,7 @@ $env:GRADLE_USER_HOME='E:\Cache\MyDear\gradle'
 .\gradlew.bat test lint assembleDebug
 ```
 
-검색 프록시를 배포한 빌드는 `-PMY_DEAR_SEARCH_ENDPOINT=https://example.com/v1/search`를 추가합니다. 속성이 비어 있으면 검색 스위치는 안전하게 비활성화됩니다. `services/gateway`는 인증·호출자별 제한을 붙이기 전에는 배포하면 안 되는 스캐폴드입니다. 모델은 설정 화면에서 공식 고정 리비전을 다운로드하며 APK에 포함되지 않습니다.
+검색 프록시를 배포한 빌드는 `-PMY_DEAR_SEARCH_ENDPOINT=https://example.com/v1/search`를 추가합니다. 속성이 비어 있는 프리뷰 빌드는 고정 HTTPS 호스트인 한국어 위키백과의 현재 공직 정보와 Open-Meteo 날씨만 제한적으로 확인합니다. `services/gateway`는 인증·호출자별 제한을 붙이기 전에는 배포하면 안 되는 스캐폴드입니다. 모델은 설정 화면에서 공식 고정 리비전을 다운로드하며 APK에 포함되지 않습니다.
 
 디자인 프로토타입은 `design/prototype`에서 `npm ci` 후 `npm run dev`로 확인할 수 있습니다.
 
@@ -36,7 +36,7 @@ $env:GRADLE_USER_HOME='E:\Cache\MyDear\gradle'
 
 - 원음은 저장하거나 서버로 전송하지 않습니다.
 - 일반 오프라인 대화는 네트워크 없이 동작하는 것을 목표로 합니다.
-- 검색을 처음 켤 때 질문 전체가 내새끼 게이트웨이와 Brave Search로 전송됨을 확인받고, 검색을 다시 끌 수 있습니다.
+- 첫 설정에서 인터넷 도움의 전송 범위를 확인받습니다. 동의 후 기본으로 켜지며, 최신 정보가 필요한 현재 질문만 고정 공개 공급자 또는 구성된 내새끼 게이트웨이로 전송되고 언제든 끌 수 있습니다.
 - 공급자 API 키와 결제 비밀은 APK에 넣지 않습니다.
 - 현재 고정 다운로드는 크기와 SHA-256을 검증한 뒤 앱 전용 저장소에서 원자적으로 활성화합니다. 공개 배포 채널은 추가로 Ed25519 서명 매니페스트를 통과해야 합니다.
 

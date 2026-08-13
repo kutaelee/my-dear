@@ -60,9 +60,10 @@ class HttpsSearchProxyGateway(
                 SearchEvidence(decoded.results.map { source ->
                     check(source.title.length <= 240 && source.host.length <= 253 && source.snippet.length <= 2_000)
                     check(SearchBoundary.isAllowedSourceUrl(source.url))
+                    val verifiedHost = checkNotNull(java.net.URI(source.url).host).lowercase()
                     SearchDocument(
                         title = source.title,
-                        host = source.host,
+                        host = verifiedHost,
                         url = source.url,
                         snippet = sanitizeEvidence(source.snippet),
                         publishedAt = source.publishedAt?.take(40),

@@ -11,3 +11,5 @@ captures/
 !*.env.example
 design/prototype/node_modules/
 design/prototype/dist/
+services/gateway/node_modules/
+services/gateway/.dev.vars*

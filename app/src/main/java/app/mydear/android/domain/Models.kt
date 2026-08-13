@@ -40,7 +40,13 @@ interface ConversationEngine {
     suspend fun release()
 }
 
-data class InstalledModel(val id: String, val path: String, val sha256: String)
+enum class ModelBackend { Cpu, Gpu }
+data class InstalledModel(
+    val id: String,
+    val path: String,
+    val sha256: String,
+    val backend: ModelBackend = ModelBackend.Cpu,
+)
 
 sealed interface SttEvent {
     data class Partial(val text: String) : SttEvent

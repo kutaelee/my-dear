@@ -15,4 +15,12 @@ class ToolPolicyTest {
         val decision = ToolPolicy.evaluate(ToolProposal(ToolName.PrepareCall, mapOf("phone" to "021234567", "execute" to "true"), "turn"))
         assertFalse(decision.allowed)
     }
+
+    @Test fun `expired or future approval fails closed`() {
+        val now = 1_000_000L
+        val expired = ToolProposal(ToolName.PrepareCall, mapOf("phone" to "021234567"), "turn", now - ToolPolicy.APPROVAL_TTL_MS - 1, "nonce-1234567890")
+        val future = expired.copy(createdAtEpochMs = now + 5_001)
+        assertFalse(ToolPolicy.evaluate(expired, now).allowed)
+        assertFalse(ToolPolicy.evaluate(future, now).allowed)
+    }
 }

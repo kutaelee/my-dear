@@ -42,7 +42,7 @@ object VoiceReducer {
 
     fun accessibleLabel(state: VoiceState): String = when (state) {
         VoiceState.Idle -> "말하기"
-        is VoiceState.Listening -> "듣고 있어요 · 다 말했어요"
+        is VoiceState.Listening -> "듣고 있어요 · 듣기 취소"
         is VoiceState.PreparingAnswer -> "답변을 준비하고 있어요 · 취소"
         is VoiceState.Speaking -> "읽어드리고 있어요 · 다시 말하기"
         is VoiceState.Failed -> "문제가 생겼어요 · 다시 시도"

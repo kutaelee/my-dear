@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "gemma-4-e4b-it-mobile",
+  "provider": "litert-community",
+  "revision": "2eee7ac325f20eb8c9ac1d0e972f7c84663062da",
+  "format": "litertlm",
+  "quantization": "mobile-qat-targeted-mixed-2-4-8-bit-with-mtp",
+  "files": [
+    {"path": "gemma-4-E4B-it-gpu.litertlm", "size": 2969059328, "sha256": "4912bb5a9c30993c51a7711f763212077458529312175df0573a78323a2bb7ff"}
+  ],
+  "licenseUrl": "https://ai.google.dev/gemma/terms",
+  "minimumAppVersion": "0.1.0",
+  "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/2eee7ac325f20eb8c9ac1d0e972f7c84663062da/gemma-4-E4B-it-gpu.litertlm?download=true",
+  "backend": "gpu",
+  "status": "verified-metadata-requires-release-signature"
+}

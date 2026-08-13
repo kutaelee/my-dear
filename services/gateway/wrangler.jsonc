@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-dear-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-13",
+  "workers_dev": false,
+  "observability": { "enabled": true, "head_sampling_rate": 0.05 }
+}

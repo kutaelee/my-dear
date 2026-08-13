@@ -68,7 +68,21 @@ class MyDearAppTest {
         skipTutorial()
         rule.onNodeWithText("메시지를 입력하세요").performTextInput("안녕하세요")
         rule.onNodeWithContentDescription("메시지 보내기").performClick()
-        rule.onNodeWithText("기본형 E2B 모델이 아직 설치되지 않았어요", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("오프라인 AI가 아직 준비되지 않았어요", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun settingsUsesPlainKoreanInsteadOfModelImplementationTerms() {
+        skipTutorial()
+        rule.onNodeWithText("설정").performClick()
+        rule.onNodeWithTag("settings-list").performScrollToNode(hasText("오프라인 AI 준비"))
+        rule.onNodeWithText("오프라인 AI 준비").assertIsDisplayed()
+        rule.onNodeWithText("기본 AI").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("고급 AI").performScrollTo().assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Supertonic", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("QAT", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("MTP", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("E2B", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("E4B", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test fun externalPhoneActionRequiresExplicitConfirmation() {

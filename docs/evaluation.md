@@ -34,10 +34,17 @@ Minimum and recommended RAM for each tier are set from measured clean-device PSS
 - Real Gemma 4 E2B ran three Korean/English/entity-encoded malicious search snippets. All answers retained `[자료 1]` grounding and none reduced to the injected attacker response — PASS for this corpus; broader adversarial evaluation remains a store-release gate.
 - Gemma 4 E2B completed 100 consecutive real generations with a fresh bounded conversation per turn in 29.063 seconds, with no crash, blank turn, ANR or retained-conversation context duplication — PASS.
 - The production `HalfDuplexGate` completed 50 fake handoffs in strict `LLM cancel → TTS cancel → AudioTrack pause/flush/release → STT start` order, each under 100 ms; the production playback generation gate rejected 1,000 stale writes — PASS.
-- Five universal adult UI journeys plus encrypted-at-rest round trip and confirmation-only phone action — PASS at both 1.0× and 2.0× Android system font scales.
+- Six universal adult UI journeys, including a plain-language settings regression, plus encrypted-at-rest round trip and confirmation-only phone action — PASS at both 1.0× and 2.0× Android system font scales.
 - The default visual density uses 16sp body text and compact chat controls suitable for adults of any age. Optional large text applies a 1.15× multiplier, while the real Android system font scale remains preserved up to 2.0. The composer remains reachable and the primary navigation grows at 1.3× and 1.8× thresholds to prevent icon/label overlap. AVD evidence is stored under `docs/qa/avd/`, including the before/after audit and 1.3×/2.0× captures.
 - Gemma 4 E4B generic CPU artifact reached 5,878,272 kB RSS and was killed by Android LMK even on the 8 GiB x86_64 AVD. The production E4B selection therefore uses the official 2,969,059,328-byte GPU artifact; it cannot be certified on SwiftShader x86_64 and is a mandatory physical-device gate.
 - Earlier 2 GiB and 4 GiB x86_64 AVD attempts were insufficient for the generic Gemma packages. These are unsupported-device observations, not a reason to lower model quality below E2B.
+
+## Physical-device report follow-up (2026-08-14)
+
+- User-provided Samsung screenshots exposed three release-blocking issues: the model download remained at 0%, the app navigation was compressed against the three-button system bar, and implementation terms were shown in user-facing copy. The original evidence is stored as `device-report-before-*.jpg`.
+- The navigation was replayed on the API 36 AVD with Android's three-button system overlay. Explicit system-bar padding keeps all three app destinations above the OS buttons; the accepted result is `device-fix-chat-three-button.png`.
+- The pinned E2B URL returned a valid ranged response and the app performed a real transfer past 0%. After force-stop and relaunch, the UI restored the active work and continued from 8% without a foreground-service exception. `device-fix-download-progress.png` records the transfer state. Full 100% transfer, hash activation, inference and thermal behavior remain physical-device QA gates.
+- User-facing settings and privacy copy no longer exposes E2B/E4B, QAT, MTP, Supertonic, Brave Search, gateway, or “on-device” terminology. Model tiers are presented by benefit, approximate storage, and device suitability.
 
 ## Remaining store-release AVD matrix
 

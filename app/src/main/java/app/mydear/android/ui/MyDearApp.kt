@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -52,6 +54,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -207,7 +210,9 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         bottomBar = {
             NavigationBar(
                 containerColor = Color.White,
+                windowInsets = WindowInsets(0, 0, 0, 0),
                 modifier = Modifier
+                    .navigationBarsPadding()
                     .height(navigationHeight)
                     .testTag("primary-navigation"),
             ) {
@@ -259,7 +264,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (showSearchDisclosure) AlertDialog(
         onDismissRequest = { showSearchDisclosure = false },
         title = { Text("웹 검색 전 확인") },
-        text = { Text("검색을 켜 둔 동안 질문 전체가 내새끼 검색 게이트웨이와 Brave Search로 전송됩니다. 원음과 이전 대화는 보내지 않습니다. 민감한 개인정보는 질문에 쓰지 마세요.") },
+        text = { Text("웹 검색을 켜면 현재 질문 내용이 인터넷 검색을 위해 전송됩니다. 음성 녹음과 이전 대화는 보내지 않아요. 이름, 주소, 전화번호 같은 개인정보는 질문에 쓰지 마세요.") },
         dismissButton = { OutlinedButton(onClick = { showSearchDisclosure = false }) { Text("취소") } },
         confirmButton = { Button(onClick = { showSearchDisclosure = false; chatViewModel.setWebSearch(true) }) { Text("동의하고 켜기") } },
     )
@@ -335,7 +340,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     ) {
                         Icon(Icons.Outlined.Lock, contentDescription = null, tint = Color(0xFF6B625D), modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("온디바이스", fontSize = 13.sp, color = Color(0xFF6B625D), modifier = Modifier.weight(1f))
+                        Text("휴대폰 안에서", fontSize = 13.sp, color = Color(0xFF6B625D), modifier = Modifier.weight(1f))
                         Icon(Icons.Outlined.Cloud, contentDescription = null, tint = if (state.searchConfigured) Coral else Color(0xFF9C9490), modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("웹 검색", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -462,7 +467,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         }
         if (expandedPlans) item { PlanComparison() }
         item { SettingRow("글자 크기", if (largeText) "크게" else "보통") { onLargeTextChange(!largeText) } }
-        item { SettingRow("목소리 속도", "실기기 음성 QA 후 제공", enabled = false) }
+        item { SettingRow("목소리 속도", "곧 사용할 수 있어요", enabled = false) }
         item { SettingRow("사용법 다시 보기", "4단계 안내", onClick = onShowTutorial) }
         item { SettingRow("개인정보와 인터넷 검색", "전송 범위 확인") { showPrivacy = true } }
         item {
@@ -470,12 +475,13 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 Modifier.fillMaxWidth().border(1.dp, Color(0xFFE3D6CF), RoundedCornerShape(20.dp)).padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("모델과 저장 공간", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("E2B가 최소 품질이며, 더 작은 언어 모델은 사용하지 않아요.", style = MaterialTheme.typography.bodyMedium)
+                Text("오프라인 AI 준비", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("처음 한 번 와이파이로 내려받으면 인터넷 없이 대화할 수 있어요.", style = MaterialTheme.typography.bodyMedium)
                 GemmaTier.entries.forEach { tier ->
                     val selected = state.selectedModelTier == tier
                     OutlinedButton(
                         onClick = { onSelectModelTier(tier) },
+                        enabled = !state.isDownloadingModel,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
                         shape = RoundedCornerShape(16.dp),
                     ) {
@@ -487,25 +493,29 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     }
                 }
                 Text(
-                    if (state.modelInstalled) "AI 모델 설치 완료" else "선택한 AI 모델 설치가 필요해요",
+                    if (state.modelInstalled) "오프라인 대화 준비 완료" else "사용할 AI를 내려받아 주세요",
                     color = if (state.modelInstalled) Color(0xFF237A3B) else MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.Bold,
                 )
-                Button(
-                    onClick = onInstallModel,
-                    enabled = !state.modelInstalled && !state.isDownloadingModel,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-                ) {
+                if (state.isDownloadingModel) {
                     Text(
-                        when {
-                            state.modelInstalled -> "설치 완료"
-                            state.isDownloadingModel -> "다운로드 ${state.modelDownloadProgress}%"
-                            else -> "${state.selectedModelTier.label} 설치하기"
-                        },
+                        if (state.modelDownloadProgress == 0) "다운로드를 준비하고 있어요…" else "내려받는 중 ${state.modelDownloadProgress}%",
+                        fontWeight = FontWeight.SemiBold,
                     )
+                    LinearProgressIndicator(
+                        progress = { state.modelDownloadProgress / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("화면을 나가도 다운로드는 계속돼요. 연결이 끊기면 받은 부분부터 다시 이어져요.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Button(
+                        onClick = onInstallModel,
+                        enabled = !state.modelInstalled,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                    ) { Text(if (state.modelInstalled) "준비 완료" else "${state.selectedModelTier.label} 다운로드") }
                 }
                 Text(
-                    if (state.ttsInstalled) "한국어 목소리 설치 완료" else "음성 답변용 Supertonic 3 설치가 필요해요",
+                    if (state.ttsInstalled) "한국어 목소리 준비 완료" else "답변을 읽어줄 한국어 목소리도 받을 수 있어요.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedButton(
@@ -515,20 +525,21 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 ) {
                     Text(
                         when {
-                            state.ttsInstalled -> "목소리 설치 완료"
-                            state.isDownloadingTts -> "목소리 다운로드 ${state.ttsDownloadProgress}%"
-                            else -> "한국어 목소리 설치하기"
+                            state.ttsInstalled -> "목소리 준비 완료"
+                            state.isDownloadingTts && state.ttsDownloadProgress == 0 -> "목소리 다운로드 준비 중…"
+                            state.isDownloadingTts -> "목소리 받는 중 ${state.ttsDownloadProgress}%"
+                            else -> "한국어 목소리 다운로드"
                         },
                     )
                 }
-                Text("모바일 QAT 혼합 양자화와 MTP 가속을 사용해 품질을 유지하면서 메모리와 응답 시간을 줄여요.", fontSize = 14.sp, lineHeight = 21.sp)
+                Text("두 AI 모두 이 휴대폰에만 저장돼요. 기본 AI를 먼저 사용해보고 답변이 더 자세해야 할 때 고급 AI로 바꿔보세요.", fontSize = 14.sp, lineHeight = 21.sp)
             }
         }
     }
     if (showPrivacy) AlertDialog(
         onDismissRequest = { showPrivacy = false },
         title = { Text("개인정보와 검색") },
-        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리합니다. 웹 검색을 켜면 질문 전체가 내새끼 검색 게이트웨이와 Brave Search로 전송됩니다. 원음과 이전 대화는 보내지 않습니다.") },
+        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 웹 검색을 켜면 현재 질문 내용만 인터넷 검색을 위해 전송됩니다. 음성 녹음과 이전 대화는 보내지 않아요.") },
         confirmButton = { Button(onClick = { showPrivacy = false }) { Text("확인") } },
     )
 }
@@ -554,11 +565,11 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
 
 @Composable private fun TutorialDialog(onClose: () -> Unit) {
     var step by rememberSaveable { mutableIntStateOf(1) }
-    val titles = listOf("글이나 말로 물어보세요", "말하는 중에도 다시 시작할 수 있어요", "검색을 켜면 질문 전체를 보내요", "나에게 편하게 맞춰보세요")
+    val titles = listOf("글이나 말로 물어보세요", "답변 중에도 다시 말할 수 있어요", "웹 검색은 선택할 수 있어요", "나에게 편하게 맞춰보세요")
     val bodies = listOf(
-        "메시지를 쓰거나 큰 ‘말로 하기’ 버튼을 누르면 돼요.",
-        "내새끼가 읽는 중에 ‘다시 말하기’를 누르면 바로 멈추고 새로 들을게요.",
-        "일반 대화는 휴대폰 안에서 처리합니다. 웹 검색을 켜 둔 동안 질문 전체가 내새끼 검색 게이트웨이와 Brave Search로 전송돼요.",
+        "아래 입력창에 메시지를 쓰거나 왼쪽 마이크 버튼을 눌러 말해보세요.",
+        "내새끼가 읽는 중에도 마이크를 누르면 답변을 멈추고 새 질문을 들을게요.",
+        "평소 대화는 휴대폰 안에서 처리해요. 최신 정보가 필요할 때만 웹 검색을 켜고, 현재 질문 내용만 인터넷 검색에 사용해요.",
         "설정에서 글자 크기를 언제든 바꿀 수 있어요.",
     )
     Dialog(onDismissRequest = onClose) {

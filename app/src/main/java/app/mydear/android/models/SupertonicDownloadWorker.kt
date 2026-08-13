@@ -3,12 +3,16 @@ package app.mydear.android.models
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -140,7 +144,7 @@ class SupertonicDownloadWorker(appContext: Context, params: WorkerParameters) : 
             .setOngoing(true)
             .setProgress(100, progress, false)
             .build()
-        return ForegroundInfo(NOTIFICATION_ID, notification)
+        return ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
     private fun File.sha256(): String {
@@ -169,6 +173,7 @@ class SupertonicDownloadWorker(appContext: Context, params: WorkerParameters) : 
         private const val REQUIRED_FREE_BYTES = 512L * 1024 * 1024
         private const val CHANNEL_ID = "tts_install"
         private const val NOTIFICATION_ID = 4103
+        const val WORK_NAME = "supertonic-install"
         private val REQUIRED_FILES = mapOf(
             "duration_predictor.int8.onnx" to (3_700_147L to "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db"),
             "text_encoder.int8.onnx" to (36_416_150L to "c7befd5ea8c3119769e8a6c1486c4edc6a3bc8365c67621c881bbb774b9902ff"),
@@ -179,8 +184,12 @@ class SupertonicDownloadWorker(appContext: Context, params: WorkerParameters) : 
             "voice.bin" to (517_168L to "67d5209b0ee8ce6c74105ffbe12fe6a7628aea3b4ba2fcb308a4a67938a93ce8"),
         )
 
-        fun enqueue(context: Context) = OneTimeWorkRequestBuilder<SupertonicDownloadWorker>().build().also { request ->
-            WorkManager.getInstance(context).enqueueUniqueWork("supertonic-install", ExistingWorkPolicy.KEEP, request)
-        }
+        fun enqueue(context: Context) = OneTimeWorkRequestBuilder<SupertonicDownloadWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+            .build()
+            .also { request ->
+                WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, request)
+            }
     }
 }

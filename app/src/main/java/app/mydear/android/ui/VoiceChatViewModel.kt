@@ -92,6 +92,8 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     val state: StateFlow<ChatUiState> = mutableState.asStateFlow()
     private var listeningJob: Job? = null
     private var answerJob: Job? = null
+    private var modelDownloadJob: Job? = null
+    private var ttsDownloadJob: Job? = null
     private var preparedModelId: String? = null
     private var preparedTts = false
     private var activeTurnId: TurnId? = null
@@ -106,6 +108,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 chatStore.save(messages)
             }
         }
+        restoreActiveDownloads()
     }
 
     fun updateDraft(value: String) = mutableState.update { it.copy(draft = value.take(4_000), notice = null) }
@@ -223,10 +226,19 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         val tier = state.value.selectedModelTier
         val request = ModelDownloadWorker.enqueue(getApplication(), tier)
         mutableState.update { it.copy(isDownloadingModel = true, modelDownloadProgress = 0, notice = "${tier.label} 다운로드를 시작했어요") }
-        viewModelScope.launch {
+        observeModelDownload(request.id, tier)
+    }
+
+    private fun observeModelDownload(workId: UUID, tier: GemmaTier) {
+        modelDownloadJob?.cancel()
+        modelDownloadJob = viewModelScope.launch {
             val workManager = WorkManager.getInstance(getApplication())
             while (true) {
-                val info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.id).get() } ?: break
+                val info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(workId).get() }
+                if (info == null) {
+                    mutableState.update { it.copy(isDownloadingModel = false, notice = "다운로드 상태를 확인하지 못했어요. 다시 눌러 주세요.") }
+                    break
+                }
                 val progress = info.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0)
                 mutableState.update { it.copy(modelDownloadProgress = progress) }
                 when (info.state) {
@@ -260,10 +272,19 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         if (state.value.isDownloadingTts || state.value.ttsInstalled) return
         val request = SupertonicDownloadWorker.enqueue(getApplication())
         mutableState.update { it.copy(isDownloadingTts = true, ttsDownloadProgress = 0, notice = "한국어 목소리 다운로드를 시작했어요") }
-        viewModelScope.launch {
+        observeTtsDownload(request.id)
+    }
+
+    private fun observeTtsDownload(workId: UUID) {
+        ttsDownloadJob?.cancel()
+        ttsDownloadJob = viewModelScope.launch {
             val workManager = WorkManager.getInstance(getApplication())
             while (true) {
-                val info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.id).get() } ?: break
+                val info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(workId).get() }
+                if (info == null) {
+                    mutableState.update { it.copy(isDownloadingTts = false, notice = "목소리 다운로드 상태를 확인하지 못했어요. 다시 눌러 주세요.") }
+                    break
+                }
                 mutableState.update {
                     it.copy(ttsDownloadProgress = info.progress.getInt(SupertonicDownloadWorker.KEY_PROGRESS, 0))
                 }
@@ -292,6 +313,43 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+    }
+
+    private fun restoreActiveDownloads() {
+        val workManager = WorkManager.getInstance(getApplication())
+        val tier = state.value.selectedModelTier
+        viewModelScope.launch {
+            val activeModel = withContext(Dispatchers.IO) {
+                workManager.getWorkInfosForUniqueWork(ModelDownloadWorker.workName(tier)).get()
+                    .lastOrNull { it.state in ACTIVE_WORK_STATES }
+            }
+            if (activeModel != null) {
+                mutableState.update {
+                    it.copy(
+                        isDownloadingModel = true,
+                        modelDownloadProgress = activeModel.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0),
+                    )
+                }
+                observeModelDownload(activeModel.id, tier)
+            }
+            val activeTts = withContext(Dispatchers.IO) {
+                workManager.getWorkInfosForUniqueWork(SupertonicDownloadWorker.WORK_NAME).get()
+                    .lastOrNull { it.state in ACTIVE_WORK_STATES }
+            }
+            if (activeTts != null) {
+                mutableState.update {
+                    it.copy(
+                        isDownloadingTts = true,
+                        ttsDownloadProgress = activeTts.progress.getInt(SupertonicDownloadWorker.KEY_PROGRESS, 0),
+                    )
+                }
+                observeTtsDownload(activeTts.id)
+            }
+        }
+    }
+
+    private companion object {
+        val ACTIVE_WORK_STATES = setOf(WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING, WorkInfo.State.BLOCKED)
     }
 
     private fun requestAnswer(text: String, speak: Boolean, turnId: TurnId = TurnId.create()) {
@@ -324,7 +382,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
             val assistant = ChatMessage(
                 assistantId,
                 Role.Assistant,
-                "${state.value.selectedModelTier.label} 모델이 아직 설치되지 않았어요. 설정의 ‘모델과 저장 공간’에서 설치하면 인터넷 없이 답할 수 있어요.",
+                "오프라인 AI가 아직 준비되지 않았어요. 하단 ‘설정’의 ‘오프라인 AI 준비’에서 기본 AI를 내려받아 주세요.",
             )
             mutableState.update { it.copy(messages = it.messages + user + assistant, notice = null, voiceState = VoiceState.Idle) }
             return

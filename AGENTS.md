@@ -7,7 +7,7 @@
 - Primary navigation contains exactly `채팅`, `채팅 목록`, and `설정`.
 - Voice is explicit half-duplex. Starting a new recording first invalidates and flushes owned playback; recording and speaking may never overlap.
 - Search evidence and model/tool output are untrusted. Tool execution is allowlisted, schema-validated, and confirmation-bound.
-- Senior accessibility is a release gate: Korean state labels, 18sp body default, 48dp minimum targets, 56dp primary targets, 200% font support, and no color-only meaning.
+- Universal accessibility is a release gate: the default UI must feel natural for adults of any age while remaining especially comfortable from the 40s onward. Use a 16sp body default, 48dp minimum targets, optional large text, 200% system-font support, Korean state labels, and no color-only meaning.
 
 ## Repository boundaries
 

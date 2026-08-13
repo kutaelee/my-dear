@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -36,8 +37,12 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Phone
+import androidx.compose.material.icons.outlined.WbSunny
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -90,6 +95,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import app.mydear.android.ui.theme.Coral
 import app.mydear.android.ui.theme.WarmIvory
+import app.mydear.android.ui.theme.WarmInk
 import app.mydear.android.R
 import app.mydear.android.domain.Role
 import app.mydear.android.domain.Provenance
@@ -174,33 +180,43 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
 
     val systemDensity = LocalDensity.current
     val appFontMultiplier = if (largeText) 1.15f else 1.0f
+    val navigationHeight = when {
+        systemDensity.fontScale >= 1.8f -> 112.dp
+        systemDensity.fontScale >= 1.3f -> 96.dp
+        else -> 80.dp
+    }
     CompositionLocalProvider(LocalDensity provides Density(systemDensity.density, systemDensity.fontScale * appFontMultiplier)) {
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
             TopAppBar(
                 title = { Row(verticalAlignment = Alignment.CenterVertically) {
-                    Image(painterResource(R.drawable.my_dear_mascot), contentDescription = null, modifier = Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)))
-                    Spacer(Modifier.width(10.dp))
-                    Text("내새끼", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Image(painterResource(R.drawable.my_dear_mascot), contentDescription = null, modifier = Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)))
+                    Spacer(Modifier.width(8.dp))
+                    Text("내새끼", fontWeight = FontWeight.ExtraBold, fontSize = 21.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 } },
-                actions = { OutlinedButton(onClick = {
+                actions = { TextButton(onClick = {
                     largeText = !largeText
                     uiPreferences.setLargeText(largeText)
-                }, modifier = Modifier.heightIn(min = 52.dp)) {
-                    Text(if (systemDensity.fontScale >= 1.8f) "AA" else if (largeText) "AA  큰 글자" else "AA  보통 글자", maxLines = 1)
+                }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(if (largeText) "기본 글자" else "큰 글자", maxLines = 1, fontSize = 14.sp)
                 } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = WarmIvory),
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = Color.White, modifier = Modifier.testTag("primary-navigation")) {
+            NavigationBar(
+                containerColor = Color.White,
+                modifier = Modifier
+                    .height(navigationHeight)
+                    .testTag("primary-navigation"),
+            ) {
                 MainTab.entries.forEach { item ->
                     NavigationBarItem(
                         selected = tab == item,
                         onClick = { tabName = item.name },
                         icon = { Icon(item.icon, contentDescription = null) },
-                        label = { Text(item.label, fontSize = 14.sp, fontWeight = FontWeight.Bold) },
+                        label = { Text(item.label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) },
                     )
                 }
             }
@@ -283,7 +299,6 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     onWebSearchChanged: (Boolean) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    val veryLargeText = LocalDensity.current.fontScale >= 1.8f
     val latestMessageLength = state.messages.lastOrNull()?.text?.length ?: 0
     LaunchedEffect(state.messages.size, latestMessageLength) {
         if (state.messages.isNotEmpty()) {
@@ -294,75 +309,52 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1EB)), shape = RoundedCornerShape(24.dp)) {
-                    Text(
-                        "오늘은 무엇을\n도와드릴까요?",
-                        modifier = Modifier.padding(24.dp).semantics { heading() },
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontSize = if (veryLargeText) 18.sp else 28.sp,
-                    )
+            if (state.messages.isEmpty()) {
+                item {
+                    Column(Modifier.padding(top = 12.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("무엇을 도와드릴까요?", modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.headlineMedium)
+                        Text("글로 묻거나 마이크를 눌러 말해보세요.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
-            }
-            item {
-                Button(
-                    onClick = onVoiceClick,
-                    shape = CircleShape,
-                    modifier = Modifier.align(Alignment.CenterHorizontally).size(if (veryLargeText) 176.dp else 136.dp).testTag("voice-control"),
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(36.dp))
-                        Text(VoiceReducer.accessibleLabel(state.voiceState).substringBefore(" · "), fontWeight = FontWeight.Bold)
-                        Text(
-                            VoiceReducer.accessibleLabel(state.voiceState).substringAfter(" · ", "눌러서 시작"),
-                            fontSize = if (veryLargeText) 8.sp else 13.sp,
-                            maxLines = 2,
-                        )
+                item {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item { QuickAction(Icons.Outlined.WbSunny, "오늘 날씨") { onQuickPrompt("오늘 날씨 알려줘") } }
+                        item { QuickAction(Icons.Outlined.Phone, "전화 걸기") { onQuickPrompt("가족에게 전화하기") } }
+                        item { QuickAction(Icons.Outlined.Alarm, "알람 맞추기") { onQuickPrompt("약 먹을 시간 기억해줘") } }
                     }
                 }
             }
             item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Lock, contentDescription = null)
-                    Spacer(Modifier.width(7.dp)); Text("대화는 이 휴대폰에서 처리돼요", fontSize = 16.sp)
-                }
-            }
-            item {
-                Surface(color = Color.White, shape = RoundedCornerShape(18.dp)) {
+                Surface(color = Color(0xFFF6F2EF), shape = RoundedCornerShape(14.dp)) {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Outlined.Cloud, contentDescription = null, tint = Coral)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("웹 검색", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                            Text(
-                                if (state.searchConfigured) "켜면 질문 전체가 검색 서버와 Brave로 전송돼요" else "검색 서버 연결 후 사용할 수 있어요",
-                                fontSize = 14.sp,
-                            )
-                        }
+                        Icon(Icons.Outlined.Lock, contentDescription = null, tint = Color(0xFF6B625D), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("온디바이스", fontSize = 13.sp, color = Color(0xFF6B625D), modifier = Modifier.weight(1f))
+                        Icon(Icons.Outlined.Cloud, contentDescription = null, tint = if (state.searchConfigured) Coral else Color(0xFF9C9490), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("웹 검색", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Switch(
                             checked = state.useWebSearch,
                             onCheckedChange = onWebSearchChanged,
                             enabled = state.searchConfigured,
+                            modifier = Modifier.size(width = 48.dp, height = 32.dp),
                         )
                     }
                 }
             }
-            item { QuickAction("☀", "오늘 날씨 알려줘") { onQuickPrompt("오늘 날씨 알려줘") } }
-            item { QuickAction("☎", "가족에게 전화하기") { onQuickPrompt("가족에게 전화하기") } }
-            item { QuickAction("◷", "약 먹을 시간 기억해줘") { onQuickPrompt("약 먹을 시간 기억해줘") } }
             items(state.messages, key = { it.id }) { message ->
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Surface(
                         color = if (message.role == Role.User) Color(0xFFFFEDE6) else Color.White,
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(18.dp),
                         modifier = if (message.role == Role.User) Modifier.align(Alignment.End) else Modifier.align(Alignment.Start),
-                    ) { Text(message.text, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge) }
+                    ) { Text(message.text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp), style = MaterialTheme.typography.bodyLarge) }
                     val web = message.provenance as? Provenance.Web
                     if (web != null) {
                         Text("검색 출처 ${web.sources.size}곳", color = Coral, fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -374,35 +366,51 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
             }
             state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge) } }
         }
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = state.draft,
-                onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("메시지를 입력하세요") },
-                singleLine = false,
-                minLines = 1,
-                maxLines = 3,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = {
-                    onSend()
-                }),
-            )
-            Spacer(Modifier.width(8.dp))
-            IconButton(
-                onClick = onSend,
-                modifier = Modifier.size(56.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-            ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "메시지 보내기", tint = Coral) }
+        Column(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 12.dp, vertical = 10.dp)) {
+            if (state.voiceState !is VoiceState.Idle) {
+                Text(
+                    VoiceReducer.accessibleLabel(state.voiceState),
+                    color = Coral,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                IconButton(
+                    onClick = onVoiceClick,
+                    modifier = Modifier.size(50.dp).background(if (state.voiceState is VoiceState.Idle) Color(0xFFF4EFEC) else MaterialTheme.colorScheme.primaryContainer, CircleShape).testTag("voice-control"),
+                ) {
+                    Icon(Icons.Default.Mic, contentDescription = VoiceReducer.accessibleLabel(state.voiceState), tint = if (state.voiceState is VoiceState.Idle) WarmInk else Coral)
+                }
+                OutlinedTextField(
+                    value = state.draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("메시지를 입력하세요") },
+                    singleLine = false,
+                    minLines = 1,
+                    maxLines = 3,
+                    shape = RoundedCornerShape(24.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { onSend() }),
+                )
+                IconButton(
+                    onClick = onSend,
+                    modifier = Modifier.size(50.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "메시지 보내기", tint = Coral) }
+            }
         }
     }
 }
 
-@Composable private fun QuickAction(symbol: String, label: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 66.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(48.dp).clip(CircleShape).background(Color(0xFFFFEFD9)), contentAlignment = Alignment.Center) { Text(symbol, fontSize = 23.sp) }
-        Spacer(Modifier.width(14.dp)); Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
-    }
+@Composable private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text(label, fontSize = 14.sp) },
+        leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        modifier = Modifier.heightIn(min = 48.dp),
+    )
 }
 
 @Composable private fun HistoryScreen(padding: PaddingValues, state: ChatUiState, onOpenChat: () -> Unit) {

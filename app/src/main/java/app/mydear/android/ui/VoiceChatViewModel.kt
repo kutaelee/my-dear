@@ -21,12 +21,18 @@ import app.mydear.android.runtime.search.HttpsSearchProxyGateway
 import app.mydear.android.runtime.search.InternetSearchException
 import app.mydear.android.runtime.search.PublicInternetSearchGateway
 import app.mydear.android.search.InternetQueryPolicy
+import app.mydear.android.search.SearchAnswerPolicy
 import app.mydear.android.BuildConfig
 import app.mydear.android.models.GemmaTier
 import app.mydear.android.models.InstalledModelResolver
 import app.mydear.android.models.ModelPreferenceStore
 import app.mydear.android.models.ModelDownloadWorker
 import app.mydear.android.models.SupertonicDownloadWorker
+import app.mydear.android.memory.LocalMemoryRetriever
+import app.mydear.android.memory.MemoryCommand
+import app.mydear.android.memory.MemoryIntentParser
+import app.mydear.android.memory.MemoryContextBoundaryStore
+import app.mydear.android.memory.messagesAfterMemoryBoundary
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +55,7 @@ import app.mydear.android.tools.LocalActionRouter
 import app.mydear.android.tools.ToolPolicy
 import app.mydear.android.tools.ToolProposal
 import app.mydear.android.storage.EncryptedChatStore
+import app.mydear.android.storage.EncryptedMemoryStore
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
@@ -70,6 +77,7 @@ data class ChatUiState(
     val ttsDownloadProgress: Int = 0,
     val useWebSearch: Boolean = true,
     val searchConfigured: Boolean = false,
+    val savedMemories: List<String> = emptyList(),
     val pendingTool: ToolProposal? = null,
 )
 
@@ -78,6 +86,8 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     private val modelResolver = InstalledModelResolver(application)
     private val modelPreferences = ModelPreferenceStore(application)
     private val chatStore = EncryptedChatStore(application)
+    private val memoryStore = EncryptedMemoryStore(application)
+    private val memoryContextBoundary = MemoryContextBoundaryStore(application)
     private val conversation = LiteRtConversationEngine(application.cacheDir.resolve("litert-chat"))
     private val tts = SupertonicTtsEngine()
     private val audioOutput = AudioTrackPcmOutput()
@@ -93,6 +103,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
             useWebSearch = internetPreferences.isEnabled() && internetPreferences.hasSavedChoice(),
             searchConfigured = true,
             messages = chatStore.load(),
+            savedMemories = memoryStore.load().map { it.text },
         ),
     )
     val state: StateFlow<ChatUiState> = mutableState.asStateFlow()
@@ -132,6 +143,16 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun consumeTool(message: String? = null) = mutableState.update {
         it.copy(pendingTool = null, notice = message)
+    }
+
+    fun forgetAllMemories() {
+        cancelActiveAnswer()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { memoryStore.clear() }
+            conversation.resetContext()
+            memoryContextBoundary.markAfter(state.value.messages.lastOrNull()?.id)
+            mutableState.update { it.copy(savedMemories = emptyList(), notice = "저장한 내 정보를 모두 잊었어요.") }
+        }
     }
 
     @Synchronized fun takePendingToolForExecution(nonce: String): ToolProposal? {
@@ -389,16 +410,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 return
             }
         }
-        val model = modelResolver.resolveGemma(state.value.selectedModelTier)
-        if (model == null) {
-            val assistant = ChatMessage(
-                assistantId,
-                Role.Assistant,
-                "오프라인 AI가 아직 준비되지 않았어요. 하단 ‘설정’의 ‘오프라인 AI 준비’에서 기본 AI를 내려받아 주세요.",
-            )
-            mutableState.update { it.copy(messages = it.messages + user + assistant, notice = null, voiceState = VoiceState.Idle) }
-            return
-        }
+        if (handleMemoryCommand(text, user, assistantId, speak, turnId)) return
         activeTurnId = turnId
         mutableState.update {
             it.copy(
@@ -410,25 +422,65 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
         answerJob = viewModelScope.launch {
             try {
+                val evidence = loadSearchEvidenceIfRequested(text)
+                val publicAnswer = if (configuredSearchGateway == null && evidence != null) {
+                    SearchAnswerPolicy.publicAnswer(text, checkNotNull(evidence))
+                } else null
+                if (publicAnswer != null) {
+                    replaceAssistantText(assistantId, publicAnswer)
+                    attachWebProvenance(
+                        assistantId,
+                        checkNotNull(evidence),
+                        publicAnswer,
+                        SearchAnswerPolicy.publicSourceIndices(text, checkNotNull(evidence)),
+                    )
+                    if (speak) speakAnswer(turnId, publicAnswer) else finishAnswer(turnId)
+                    return@launch
+                }
+                val model = modelResolver.resolveGemma(state.value.selectedModelTier)
+                if (model == null) {
+                    val message = "오프라인 AI가 아직 준비되지 않았어요. 하단 ‘설정’의 ‘오프라인 AI 준비’에서 기본 AI를 내려받아 주세요."
+                    replaceAssistantText(assistantId, message)
+                    finishAnswer(turnId)
+                    return@launch
+                }
                 if (preparedModelId != model.id) {
                     conversation.prepare(model)
                     preparedModelId = model.id
                 }
-                val requestMessages = state.value.messages.filter { it.id != assistantId }.takeLast(12)
-                val evidence = loadSearchEvidenceIfRequested(text)
-                conversation.stream(ConversationRequest(turnId, requestMessages, evidence)).collect { event ->
+                val requestMessages = messagesAfterMemoryBoundary(
+                    state.value.messages.filter { it.id != assistantId },
+                    memoryContextBoundary.messageId(),
+                ).takeLast(12)
+                val memories = withContext(Dispatchers.IO) {
+                    LocalMemoryRetriever.retrieve(memoryStore.load(), text).map { it.text }
+                }
+                val webBuffer = StringBuilder()
+                conversation.stream(ConversationRequest(turnId, requestMessages, evidence, memories)).collect { event ->
                     when (event) {
-                        is ConversationEvent.TextDelta -> appendAssistantText(assistantId, event.value, turnId)
+                        is ConversationEvent.TextDelta -> if (evidence == null) {
+                            appendAssistantText(assistantId, event.value, turnId)
+                        } else {
+                            webBuffer.append(event.value)
+                        }
                         is ConversationEvent.Failure -> throw IllegalStateException(event.userMessage)
                         ConversationEvent.Complete -> Unit
                     }
                 }
                 if (activeTurnId != turnId) return@launch
-                var answer = cleanAssistantAnswer(state.value.messages.firstOrNull { it.id == assistantId }?.text.orEmpty())
+                val rawAnswer = if (evidence == null) {
+                    state.value.messages.firstOrNull { it.id == assistantId }?.text.orEmpty()
+                } else webBuffer.toString()
+                val answer = cleanAssistantAnswer(rawAnswer)
+                    .ifBlank { "답변을 만들지 못했어요. 질문을 조금 다르게 말씀해 주세요." }
                 replaceAssistantText(assistantId, answer)
-                if (evidence != null && !markWebProvenance(assistantId, evidence, answer)) {
-                    answer = "검색 자료를 확인했지만 출처를 정확히 연결하지 못했어요. 다른 표현으로 다시 검색해 주세요."
-                    replaceAssistantText(assistantId, answer)
+                if (evidence != null) {
+                    attachWebProvenance(
+                        assistantId,
+                        evidence,
+                        answer,
+                        SearchAnswerPolicy.sourceIndices(rawAnswer, evidence.documents.size),
+                    )
                 }
                 if (speak && answer.isNotBlank()) speakAnswer(turnId, answer)
                 else finishAnswer(turnId)
@@ -463,34 +515,87 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     private fun cleanAssistantAnswer(value: String): String = value
         .replace("**", "")
         .replace(Regex("(?m)^#{1,6}\\s*"), "")
+        .replace(Regex("\\s*\\[자료\\s*\\d+]"), "")
         .replace(Regex("[😊🙂😉😀😃😄😁👍🙏]"), "")
         .replace(Regex("[ \\t]+\\n"), "\n")
         .trim()
 
-    private fun markWebProvenance(messageId: String, evidence: SearchEvidence, answer: String): Boolean {
-        val referenced = Regex("\\[자료\\s+(\\d+)]").findAll(answer)
-            .mapNotNull { it.groupValues[1].toIntOrNull()?.minus(1) }
-            .distinct()
-            .toList()
-        if (referenced.isEmpty() || referenced.any { it !in evidence.documents.indices } || !allFactualSentencesAreCited(answer)) return false
+    private fun attachWebProvenance(
+        messageId: String,
+        evidence: SearchEvidence,
+        answer: String,
+        preferredIndices: List<Int>? = null,
+    ) {
+        val selected = preferredIndices?.filter { it in evidence.documents.indices }?.distinct()
+            ?: SearchAnswerPolicy.sourceIndices(answer, evidence.documents.size)
         mutableState.update { current ->
-        val sources = referenced.map { evidence.documents[it] }.map { source ->
-            app.mydear.android.domain.SearchSource(source.title, source.host, source.url, source.publishedAt)
+            val sources = selected.map { evidence.documents[it] }
+                .filter { it.url.startsWith("https://") }
+                .distinctBy { it.url }
+                .map { source ->
+                    app.mydear.android.domain.SearchSource(source.title, source.host, source.url, source.publishedAt)
+                }
+            current.copy(
+                messages = current.messages.map {
+                    if (it.id == messageId) it.copy(provenance = Provenance.Web(System.currentTimeMillis(), sources)) else it
+                },
+            )
         }
-        current.copy(
-            messages = current.messages.map {
-                if (it.id == messageId) it.copy(provenance = Provenance.Web(System.currentTimeMillis(), sources)) else it
-            },
-        )
+    }
+
+    private fun handleMemoryCommand(
+        text: String,
+        user: ChatMessage,
+        assistantId: String,
+        speak: Boolean,
+        turnId: TurnId,
+    ): Boolean {
+        val command = MemoryIntentParser.parse(text) ?: return false
+        activeTurnId = turnId
+        mutableState.update {
+            it.copy(
+                messages = it.messages + user + ChatMessage(assistantId, Role.Assistant, ""),
+                notice = "휴대폰 안의 기억을 정리하고 있어요",
+                isGenerating = true,
+                voiceState = if (speak) VoiceState.PreparingAnswer(turnId) else it.voiceState,
+            )
+        }
+        answerJob = viewModelScope.launch {
+            val (response, advanceMemoryBoundary) = withContext(Dispatchers.IO) {
+                when (command) {
+                    is MemoryCommand.Remember -> {
+                        val saved = memoryStore.remember(command.fact)
+                        "기억해둘게요: ${saved.text}" to false
+                    }
+                    is MemoryCommand.Forget -> {
+                        val removed = memoryStore.forgetMatching(command.query)
+                        val text = if (removed.isEmpty()) "‘${command.query}’에 관해 기억한 내용이 없어요."
+                        else "알겠어요. ${removed.size}개의 기억을 지웠어요."
+                        text to removed.isNotEmpty()
+                    }
+                    MemoryCommand.ForgetAll -> {
+                        memoryStore.clear()
+                        "저장한 내 정보를 모두 잊었어요." to true
+                    }
+                    MemoryCommand.Recall -> {
+                        val memories = memoryStore.load()
+                        val text = if (memories.isEmpty()) "아직 따로 기억해둔 내 정보가 없어요."
+                        else memories.takeLast(8).joinToString(prefix = "휴대폰에 기억해둔 내용이에요.\n", separator = "\n") { "• ${it.text}" }
+                        text to false
+                    }
+                }
+            }
+            conversation.resetContext()
+            val currentMemories = withContext(Dispatchers.IO) { memoryStore.load().map { it.text } }
+            mutableState.update { it.copy(savedMemories = currentMemories) }
+            replaceAssistantText(assistantId, response)
+            if (advanceMemoryBoundary) {
+                memoryContextBoundary.markAfter(assistantId)
+            }
+            if (speak) speakAnswer(turnId, response) else finishAnswer(turnId)
         }
         return true
     }
-
-    private fun allFactualSentencesAreCited(answer: String): Boolean = answer
-        .split(Regex("(?<=[.!?요다])\\s+(?!\\[자료)|\\n+"))
-        .map(String::trim)
-        .filter { it.length >= 6 }
-        .all { Regex("\\[자료\\s+\\d+]").containsMatchIn(it) }
 
     private suspend fun speakAnswer(turnId: TurnId, text: String) {
         val ttsModel = modelResolver.resolveSupertonic()

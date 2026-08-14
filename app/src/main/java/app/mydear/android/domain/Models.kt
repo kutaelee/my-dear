@@ -22,7 +22,12 @@ sealed interface Provenance {
 }
 
 data class SearchSource(val title: String, val host: String, val url: String, val updatedAt: String?)
-data class ConversationRequest(val turnId: TurnId, val messages: List<ChatMessage>, val evidence: SearchEvidence? = null)
+data class ConversationRequest(
+    val turnId: TurnId,
+    val messages: List<ChatMessage>,
+    val evidence: SearchEvidence? = null,
+    val memories: List<String> = emptyList(),
+)
 data class SearchRequest(val query: String, val locale: String = "ko-KR")
 data class SearchEvidence(val documents: List<SearchDocument>)
 data class SearchDocument(val title: String, val host: String, val url: String, val snippet: String, val publishedAt: String?)
@@ -37,6 +42,7 @@ interface ConversationEngine {
     suspend fun prepare(model: InstalledModel)
     fun stream(request: ConversationRequest): Flow<ConversationEvent>
     suspend fun cancel(turnId: TurnId)
+    suspend fun resetContext()
     suspend fun release()
 }
 

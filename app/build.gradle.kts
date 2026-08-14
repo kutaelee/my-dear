@@ -14,8 +14,8 @@ android {
         applicationId = "app.mydear.android"
         minSdk = 31
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.2"
+        versionCode = 3
+        versionName = "0.1.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         val searchEndpoint = providers.gradleProperty("MY_DEAR_SEARCH_ENDPOINT").orNull.orEmpty()

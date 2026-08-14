@@ -1,6 +1,7 @@
 package app.mydear.android.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -42,6 +43,7 @@ class MyDearAppTest {
             .clear()
             .commit()
         context.filesDir.resolve("private-chat").deleteRecursively()
+        context.filesDir.resolve("private-memory").deleteRecursively()
         context.filesDir.resolve("models/active-gemma-4-e2b-it-mobile.txt").delete()
         context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm").delete()
         rule.activityRule.scenario.recreate()
@@ -128,5 +130,34 @@ class MyDearAppTest {
         rule.onNodeWithText("01012345678 번호로 전화 앱을 열까요?").assertIsDisplayed()
         rule.onNodeWithText("취소").performClick()
         assertEquals(0, rule.onAllNodesWithText("실행 전 확인").fetchSemanticsNodes().size)
+    }
+
+    @Test fun currentPresidentUsesStablePublicAnswerAndVisibleSourceWithoutModel() {
+        skipTutorial()
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("우리나라 대통령 이름")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(20_000) {
+            rule.onAllNodesWithText("현재 대한민국 대통령은 이재명입니다.", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("현재 대한민국 대통령은 이재명입니다.", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("출처").assertIsDisplayed()
+        rule.onNodeWithContentDescription("출처 링크: 대한민국 대통령 목록")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        assertEquals(0, rule.onAllNodesWithText("[자료", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun explicitPersonalMemoryWorksWithoutModelAndCanBeReviewed() {
+        skipTutorial()
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("내 이름은 민수야 기억해줘")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("기억해둘게요: 내 이름은 민수야", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("설정").performClick()
+        rule.onNodeWithTag("settings-list").performScrollToNode(hasText("내 정보 기억"))
+        rule.onNodeWithText("내 정보 기억").performClick()
+        rule.onNodeWithText("• 내 이름은 민수야").assertIsDisplayed()
     }
 }

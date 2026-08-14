@@ -57,7 +57,6 @@ class KoreanAnswerQualityGemmaAvdTest {
                 ),
             )
             assertTrue("검색 자료의 인물을 답해야 합니다: $answer", answer.contains("이재명"))
-            assertTrue("검색 출처 번호가 필요합니다: $answer", Regex("\\[자료\\s+1]").containsMatchIn(answer))
             assertFalse("보고된 환각 이름이 다시 나왔습니다: $answer", answer.contains("이수환"))
         }
     }

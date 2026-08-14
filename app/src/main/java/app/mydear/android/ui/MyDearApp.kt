@@ -8,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +37,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
@@ -86,6 +89,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
@@ -94,6 +98,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
@@ -256,6 +261,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     uiPreferences.setLargeText(it)
                 },
                 onShowTutorial = { showTutorial = true },
+                onForgetAllMemories = chatViewModel::forgetAllMemories,
             )
         }
     }
@@ -309,6 +315,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     onWebSearchChanged: (Boolean) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    val uriHandler = LocalUriHandler.current
     val latestMessageLength = state.messages.lastOrNull()?.text?.length ?: 0
     LaunchedEffect(state.messages.size, latestMessageLength) {
         if (state.messages.isNotEmpty()) {
@@ -354,9 +361,39 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     ) { Text(message.text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp), style = MaterialTheme.typography.bodyLarge) }
                     val web = message.provenance as? Provenance.Web
                     if (web != null) {
-                        Text("검색 출처 ${web.sources.size}곳", color = Coral, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        web.sources.take(3).forEach { source ->
-                            Text("• ${source.title} · ${source.host}", fontSize = 14.sp, lineHeight = 20.sp)
+                        Text("출처", color = Coral, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        web.sources.take(1).forEach { source ->
+                            TextButton(
+                                onClick = {
+                                    if (source.url.startsWith("https://")) {
+                                        runCatching { uriHandler.openUri(source.url) }
+                                    }
+                                },
+                                enabled = source.url.startsWith("https://"),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .semantics { contentDescription = "출처 링크: ${source.title}" },
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                            ) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "${source.title} · ${source.host}",
+                                        modifier = Modifier.weight(1f),
+                                        color = Coral,
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp,
+                                        textDecoration = TextDecoration.Underline,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.OpenInNew,
+                                        contentDescription = null,
+                                        tint = Coral,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -482,9 +519,12 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     largeText: Boolean,
     onLargeTextChange: (Boolean) -> Unit,
     onShowTutorial: () -> Unit,
+    onForgetAllMemories: () -> Unit,
 ) {
     var expandedPlans by rememberSaveable { mutableStateOf(false) }
     var showPrivacy by rememberSaveable { mutableStateOf(false) }
+    var showMemories by rememberSaveable { mutableStateOf(false) }
+    var confirmForgetAll by rememberSaveable { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("settings-list"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("설정", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() }) }
         item { Text("나에게 편한 모습과 목소리로 바꿔보세요.", style = MaterialTheme.typography.bodyLarge) }
@@ -501,6 +541,12 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         if (expandedPlans) item { PlanComparison() }
         item { SettingToggleRow("큰 글자", "화면의 글자를 조금 더 크게 표시", largeText, onLargeTextChange) }
         item { SettingRow("목소리 속도", "곧 사용할 수 있어요", enabled = false) }
+        item {
+            SettingRow(
+                "내 정보 기억",
+                if (state.savedMemories.isEmpty()) "기억해둔 내용 없음" else "${state.savedMemories.size}개 · 휴대폰 안에만 저장",
+            ) { showMemories = true }
+        }
         item { SettingRow("사용법 다시 보기", "4단계 안내", onClick = onShowTutorial) }
         item { SettingRow("개인정보와 인터넷 도움", "어떤 정보가 전송되는지 확인") { showPrivacy = true } }
         item {
@@ -574,6 +620,37 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         title = { Text("개인정보와 검색") },
         text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 인터넷 도움을 켜면 날씨나 최신 정보가 필요한 현재 질문만 인터넷으로 전송해요. 음성 녹음과 이전 대화는 보내지 않아요.") },
         confirmButton = { Button(onClick = { showPrivacy = false }) { Text("확인") } },
+    )
+    if (showMemories) AlertDialog(
+        onDismissRequest = { showMemories = false },
+        title = { Text("내 정보 기억") },
+        text = {
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                Text(
+                    if (state.savedMemories.isEmpty()) {
+                        "‘내 이름은 ○○야, 기억해줘’처럼 말하면 필요한 정보만 휴대폰 안에 기억해요. 인터넷 검색 내용은 자동으로 기억하지 않아요."
+                    } else {
+                        state.savedMemories.takeLast(8).joinToString(separator = "\n") { "• $it" }
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        },
+        dismissButton = {
+            if (state.savedMemories.isNotEmpty()) {
+                TextButton(onClick = { showMemories = false; confirmForgetAll = true }) { Text("모두 잊기") }
+            }
+        },
+        confirmButton = { Button(onClick = { showMemories = false }) { Text("닫기") } },
+    )
+    if (confirmForgetAll) AlertDialog(
+        onDismissRequest = { confirmForgetAll = false },
+        title = { Text("저장한 정보를 모두 잊을까요?") },
+        text = { Text("휴대폰에 따로 기억해둔 내 정보만 지워요. 채팅 내용은 그대로 남아 있어요.") },
+        dismissButton = { OutlinedButton(onClick = { confirmForgetAll = false }) { Text("취소") } },
+        confirmButton = {
+            Button(onClick = { confirmForgetAll = false; onForgetAllMemories() }) { Text("모두 잊기") }
+        },
     )
 }
 

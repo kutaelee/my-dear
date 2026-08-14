@@ -573,24 +573,11 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 }
             }
             state.notice?.takeIf {
-                !state.isGenerating && state.voiceState !is VoiceState.Listening && state.voiceState !is VoiceState.PreparingAnswer
+                !state.isGenerating && state.voiceState is VoiceState.Idle
             }?.let { notice ->
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(notice, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
-                        if (state.speechSettingsRequired) {
-                            OutlinedButton(onClick = onOpenSpeechSettings, modifier = Modifier.heightIn(min = 48.dp)) {
-                                Text("한국어 음성 설정 열기")
-                            }
-                        }
-                        if (state.systemSpeechFallbackAvailable) {
-                            Button(
-                                onClick = { showSystemSpeechDisclosure = true },
-                                modifier = Modifier.heightIn(min = 48.dp).testTag("system-speech-fallback"),
-                            ) {
-                                Text("기본 음성 입력으로 계속")
-                            }
-                        }
                     }
                 }
             }
@@ -675,6 +662,25 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                         Spacer(Modifier.width(4.dp))
                         Text(if (state.voiceState is VoiceState.Failed) "닫기" else "끝내기")
                     }
+                }
+            }
+            if (state.systemSpeechFallbackAvailable) {
+                Button(
+                    onClick = { showSystemSpeechDisclosure = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("system-speech-fallback"),
+                ) {
+                    Text("휴대폰 기본 음성 입력으로 다시 듣기")
+                }
+            }
+            if (state.speechSettingsRequired) {
+                OutlinedButton(
+                    onClick = onOpenSpeechSettings,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text("오프라인 한국어 음성 설정 열기")
                 }
             }
             if (screenShareState !is ScreenShareState.Active && screenShareState !is ScreenShareState.Starting) {

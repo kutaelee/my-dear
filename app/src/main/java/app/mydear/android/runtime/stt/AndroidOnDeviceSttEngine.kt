@@ -72,8 +72,17 @@ class AndroidOnDeviceSttEngine(
                 SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             }
         }
+        val cleanup = RegisteredResourceCleanup(active, turnId, recognizer) { resource ->
+            mainHandler.post {
+                runCatching { resource.cancel() }
+                runCatching { resource.destroy() }
+            }
+        }
         val previous = active.putIfAbsent(turnId, recognizer)
-        check(previous == null) { "이미 음성을 듣고 있어요" }
+        if (previous != null) {
+            cleanup.run(forceClose = true)
+            error("이미 음성을 듣고 있어요")
+        }
 
         val listener = object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = Unit
@@ -97,17 +106,18 @@ class AndroidOnDeviceSttEngine(
             }
         }
 
-        withContext(Dispatchers.Main.immediate) {
-            recognizer.setRecognitionListener(listener)
-            recognizer.startListening(recognitionIntent(locale))
+        try {
+            withContext(Dispatchers.Main.immediate) {
+                recognizer.setRecognitionListener(listener)
+                recognizer.startListening(recognitionIntent(locale))
+            }
+        } catch (error: Throwable) {
+            cleanup.run()
+            throw error
         }
 
         awaitClose {
-            active.remove(turnId, recognizer)
-            mainHandler.post {
-                recognizer.cancel()
-                recognizer.destroy()
-            }
+            cleanup.run()
         }
     }
 
@@ -177,14 +187,11 @@ class AndroidOnDeviceSttEngine(
                     }
 
                     override fun onError(error: Int) {
-                        complete(
-                            if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) SttAvailability.Unsupported
-                            else SttAvailability.Ready,
-                        )
+                        complete(resolveLanguageSupportError(error))
                     }
                 },
             )
-        }.onFailure { complete(SttAvailability.Ready) }
+        }.onFailure { complete(resolveLanguageSupportError(null)) }
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -240,7 +247,7 @@ class AndroidOnDeviceSttEngine(
         SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
         SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "한국어 음성 인식 모델을 사용할 수 없어요."
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "잠시 후 다시 말씀해 주세요."
-        else -> "음성 인식에 문제가 생겼어요. 다시 시도해 주세요."
+        else -> "오프라인 음성 인식을 시작하지 못했어요."
     }
 }
 
@@ -253,11 +260,30 @@ internal fun resolveLanguageSupport(
     installed.supportsLanguage(locale) -> SttAvailability.Ready
     pending.supportsLanguage(locale) -> SttAvailability.ModelDownloadRequired
     supported.supportsLanguage(locale) -> SttAvailability.ModelDownloadRequired
-    installed.isEmpty() && pending.isEmpty() && supported.isEmpty() -> SttAvailability.Ready
+    installed.isEmpty() && pending.isEmpty() && supported.isEmpty() -> SttAvailability.ModelDownloadRequired
     else -> SttAvailability.Unsupported
 }
+
+internal fun resolveLanguageSupportError(error: Int?): SttAvailability =
+    if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) SttAvailability.Unsupported
+    else SttAvailability.ModelDownloadRequired
 
 internal fun Collection<String>.supportsLanguage(locale: Locale): Boolean = any { tag ->
     val candidate = Locale.forLanguageTag(tag.replace('_', '-'))
     candidate.language.equals(locale.language, ignoreCase = true)
+}
+
+internal class RegisteredResourceCleanup<K, V>(
+    private val registry: ConcurrentHashMap<K, V>,
+    private val key: K,
+    private val value: V,
+    private val close: (V) -> Unit,
+) {
+    private val completed = AtomicBoolean(false)
+
+    fun run(forceClose: Boolean = false) {
+        if (!completed.compareAndSet(false, true)) return
+        val removed = registry.remove(key, value)
+        if (removed || forceClose) close(value)
+    }
 }

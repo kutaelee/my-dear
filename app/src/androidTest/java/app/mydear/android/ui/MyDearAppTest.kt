@@ -201,13 +201,13 @@ class MyDearAppTest {
 
     @Test fun productLinkFollowUpShowsAnActualUserFacingShortcut() {
         skipTutorial()
-        rule.onNodeWithText("메시지를 입력하세요").performTextInput("가성비 좋은 북쉘프 스피커 추천해줘")
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("요즘 잘나가는 방향제 추천해줘")
         rule.onNodeWithContentDescription("메시지 보내기").performClick()
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("오프라인 AI가 아직 준비되지 않았어요", substring = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        rule.onNodeWithText("메시지를 입력하세요").performTextInput("제품명이랑 링크줘")
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("가성비 제품으로 링크줘")
         rule.onNodeWithContentDescription("메시지 보내기").performClick()
         rule.waitUntil(5_000) {
             rule.onAllNodesWithTag("answer-loading").fetchSemanticsNodes().isEmpty()
@@ -218,7 +218,7 @@ class MyDearAppTest {
         assertTrue(shortcutCount >= 1)
         assertTrue(
             rule.onAllNodesWithContentDescription(
-                "바로가기 링크: 가성비 좋은 북쉘프 스피커 찾아보기",
+                "바로가기 링크: 가성비 방향제 찾아보기",
             ).fetchSemanticsNodes().isNotEmpty(),
         )
     }

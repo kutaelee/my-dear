@@ -39,7 +39,22 @@ class ConversationPromptTest {
 
         assertTrue(prompt.contains("제품명, 링크, 목록처럼 결과물을 지정하면 그 결과물부터 제시"))
         assertTrue(prompt.contains("대신 일반론을 길게 설명하지 마세요"))
+        assertTrue(prompt.contains("범주를 실제 제품명이라고 부르지 마세요"))
         assertTrue(MAX_OUTPUT_TOKENS >= 512)
+    }
+
+    @Test fun productShortcutDoesNotInviteInventedProductNames() {
+        val prompt = buildTurnPrompt(
+            ConversationRequest(
+                turnId = TurnId("product-shortcut"),
+                messages = listOf(ChatMessage("1", Role.User, "가성비 제품으로 링크줘")),
+                actionLinkAvailable = true,
+            ),
+        )
+
+        assertTrue(prompt.contains("이전 대화의 제품 종류와 조건을 유지"))
+        assertTrue(prompt.contains("확인된 브랜드·모델명"))
+        assertTrue(prompt.contains("제품명을 지어내지 말고"))
     }
 
     @Test fun unstableFactRequiresEvidenceAndCitation() {

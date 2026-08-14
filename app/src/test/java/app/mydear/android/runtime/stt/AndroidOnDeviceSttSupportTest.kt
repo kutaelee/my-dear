@@ -1,11 +1,13 @@
 package app.mydear.android.runtime.stt
 
+import android.speech.SpeechRecognizer
 import app.mydear.android.domain.SttAvailability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 class AndroidOnDeviceSttSupportTest {
     @Test fun KoreanRegionalAndLanguageOnlyTagsMatchKoKr() {
@@ -33,8 +35,36 @@ class AndroidOnDeviceSttSupportTest {
             resolveLanguageSupport(listOf("en-US"), emptyList(), emptyList(), Locale.KOREA),
         )
         assertEquals(
-            SttAvailability.Ready,
+            SttAvailability.ModelDownloadRequired,
             resolveLanguageSupport(emptyList(), emptyList(), emptyList(), Locale.KOREA),
         )
+    }
+
+    @Test fun supportCheckErrorsNeverPretendTheKoreanModelIsReady() {
+        assertEquals(
+            SttAvailability.Unsupported,
+            resolveLanguageSupportError(SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED),
+        )
+        assertEquals(
+            SttAvailability.ModelDownloadRequired,
+            resolveLanguageSupportError(SpeechRecognizer.ERROR_CLIENT),
+        )
+        assertEquals(
+            SttAvailability.ModelDownloadRequired,
+            resolveLanguageSupportError(null),
+        )
+    }
+
+    @Test fun recognizerSetupFailureRemovesAndClosesTheRegisteredResourceExactlyOnce() {
+        val registry = ConcurrentHashMap<String, String>()
+        registry["turn"] = "recognizer"
+        var closeCount = 0
+        val cleanup = RegisteredResourceCleanup(registry, "turn", "recognizer") { closeCount++ }
+
+        cleanup.run()
+        cleanup.run()
+
+        assertTrue(registry.isEmpty())
+        assertEquals(1, closeCount)
     }
 }

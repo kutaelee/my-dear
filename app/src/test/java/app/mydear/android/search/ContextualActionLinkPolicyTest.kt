@@ -1,6 +1,7 @@
 package app.mydear.android.search
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,5 +27,30 @@ class ContextualActionLinkPolicyTest {
             ),
         )
         assertNull(ContextualActionLinkPolicy.create("그 사람 링크줘", listOf("우리 가족 이야기")))
+        assertNull(ContextualActionLinkPolicy.create("가성비 제품으로 링크줘", emptyList()))
+    }
+
+    @Test fun genericValueFollowUpKeepsThePreviousProductCategory() {
+        val link = ContextualActionLinkPolicy.create(
+            currentQuery = "가성비 제품으로 링크줘",
+            previousUserMessages = listOf("요즘 잘나가는 방향제 추천해줘"),
+        )
+
+        requireNotNull(link)
+        assertEquals("가성비 방향제 찾아보기", link.title)
+        assertTrue(link.url.contains("%EA%B0%80%EC%84%B1%EB%B9%84"))
+        assertTrue(link.url.contains("%EB%B0%A9%ED%96%A5%EC%A0%9C"))
+    }
+
+    @Test fun previousFreeTextIsReducedToSafeProductTermsBeforeOpeningTheBrowser() {
+        val link = ContextualActionLinkPolicy.create(
+            currentQuery = "제품명이랑 링크줘",
+            previousUserMessages = listOf("김민수에게 가성비 좋은 스피커 추천해줘"),
+        )
+
+        requireNotNull(link)
+        assertEquals("가성비 좋은 스피커 찾아보기", link.title)
+        assertFalse(link.title.contains("김민수"))
+        assertFalse(link.url.contains("%EA%B9%80%EB%AF%BC%EC%88%98"))
     }
 }

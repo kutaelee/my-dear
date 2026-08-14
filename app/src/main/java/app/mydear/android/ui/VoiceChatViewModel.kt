@@ -54,6 +54,7 @@ import app.mydear.android.voice.VoiceReducer
 import app.mydear.android.voice.VoiceState
 import app.mydear.android.voice.HalfDuplexGate
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -226,7 +227,10 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     when (stt.availability(locale)) {
                         SttAvailability.Ready -> collectSpeech(turnId, locale, stt)
                         SttAvailability.ModelDownloadRequired -> {
-                            if (requestKoreanSpeechModel(locale)) collectSpeech(turnId, locale, stt)
+                            if (requestKoreanSpeechModel(locale)) {
+                                delay(OFFLINE_STT_READY_DELAY_MS)
+                                collectSpeech(turnId, locale, stt, offlineModelRetryCount = 1)
+                            }
                         }
                         SttAvailability.Unsupported -> failVoice(
                             "이 휴대폰의 오프라인 음성 인식에서 한국어를 지원하지 않아요. 글로는 계속 이용할 수 있어요.",
@@ -265,6 +269,21 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         turnId: TurnId,
         locale: Locale,
         engine: SpeechToTextEngine,
+        offlineModelRetryCount: Int = 0,
+    ) = runSpeechRecognitionGuard(
+        isOffline = engine === stt,
+        onFailure = { message, showSystemFallback ->
+            failVoice(message, showSystemFallback = showSystemFallback)
+        },
+    ) {
+        collectSpeechUnsafe(turnId, locale, engine, offlineModelRetryCount)
+    }
+
+    private suspend fun collectSpeechUnsafe(
+        turnId: TurnId,
+        locale: Locale,
+        engine: SpeechToTextEngine,
+        offlineModelRetryCount: Int,
     ) {
         var retryOnDevice = false
         engine.recognize(turnId, locale).collect { event ->
@@ -281,13 +300,24 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     requestAnswer(event.text, speak = true, turnId = turnId)
                 }
                 SttEvent.ModelDownloadRequired -> {
-                    retryOnDevice = engine === stt && requestKoreanSpeechModel(locale)
+                    if (engine !== stt) {
+                        failVoice("휴대폰 기본 음성 입력에서 한국어를 사용할 수 없어요")
+                    } else if (!canRetryOfflineModel(offlineModelRetryCount)) {
+                        failVoice(
+                            "오프라인 한국어 음성 모델을 사용할 수 없어요. 아래 버튼으로 계속할 수 있어요.",
+                            showSpeechSettings = true,
+                            showSystemFallback = true,
+                        )
+                    } else {
+                        retryOnDevice = requestKoreanSpeechModel(locale)
+                    }
                 }
                 is SttEvent.Failure -> failVoice(event.reason, showSystemFallback = engine === stt)
             }
         }
         if (retryOnDevice && state.value.voiceState is VoiceState.Listening) {
-            collectSpeech(turnId, locale, stt)
+            delay(OFFLINE_STT_READY_DELAY_MS)
+            collectSpeech(turnId, locale, stt, offlineModelRetryCount + 1)
         }
     }
 
@@ -550,6 +580,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     private companion object {
         val ACTIVE_WORK_STATES = setOf(WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING, WorkInfo.State.BLOCKED)
+        const val OFFLINE_STT_READY_DELAY_MS = 800L
     }
 
     private fun requestAnswer(text: String, speak: Boolean, turnId: TurnId = TurnId.create()) {
@@ -938,5 +969,25 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
             tts.release()
         }
         super.onCleared()
+    }
+}
+
+internal fun canRetryOfflineModel(retryCount: Int): Boolean = retryCount < 1
+
+internal suspend fun runSpeechRecognitionGuard(
+    isOffline: Boolean,
+    onFailure: (message: String, showSystemFallback: Boolean) -> Unit,
+    block: suspend () -> Unit,
+) {
+    try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        onFailure(
+            if (isOffline) "오프라인 음성 인식을 시작하지 못했어요. 아래 버튼으로 계속할 수 있어요."
+            else "휴대폰 기본 음성 입력을 시작하지 못했어요.",
+            isOffline,
+        )
     }
 }

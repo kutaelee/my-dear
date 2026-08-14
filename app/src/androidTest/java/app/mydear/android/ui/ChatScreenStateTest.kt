@@ -136,6 +136,9 @@ class ChatScreenStateTest {
                 ChatScreen(
                     padding = PaddingValues(),
                     state = ChatUiState(
+                        messages = (1..20).map { index ->
+                            ChatMessage("voice-history-$index", Role.Assistant, "이전 답변 $index ".repeat(6))
+                        },
                         voiceState = VoiceState.Failed("한국어 모델 없음"),
                         notice = "오프라인 한국어 음성 모델이 없어요.",
                         systemSpeechFallbackAvailable = true,
@@ -156,6 +159,7 @@ class ChatScreenStateTest {
 
         rule.onNodeWithTag("voice-stop").assertIsDisplayed().performClick()
         rule.runOnIdle { assertTrue(stopped) }
+        rule.onNodeWithText("휴대폰 기본 음성 입력으로 다시 듣기").assertIsDisplayed()
         rule.onNodeWithTag("system-speech-fallback").assertIsDisplayed().performClick()
         rule.onNodeWithText("기본 음성 입력을 사용할까요?").assertIsDisplayed()
         rule.onNodeWithText("취소").performClick()

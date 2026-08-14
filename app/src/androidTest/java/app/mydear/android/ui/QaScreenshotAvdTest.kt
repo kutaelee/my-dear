@@ -79,16 +79,20 @@ class QaScreenshotAvdTest {
         saveScreenshot("preview6-readable-search-source.png")
     }
 
-    @Test fun capturePreview7ProductShortcut() {
-        rule.onNodeWithText("메시지를 입력하세요").performTextInput("가성비 좋은 북쉘프 스피커 제품명이랑 링크 줘")
+    @Test fun capturePreview8ProductShortcutKeepsItsCategory() {
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("요즘 잘나가는 방향제 추천해줘")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(10_000) { !viewModel.state.value.isGenerating }
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("가성비 제품으로 링크줘")
         rule.onNodeWithContentDescription("메시지 보내기").performClick()
         rule.waitUntil(10_000) {
             !viewModel.state.value.isGenerating &&
                 viewModel.state.value.messages.lastOrNull()?.provenance is app.mydear.android.domain.Provenance.ActionLink
         }
         rule.onNodeWithText("바로가기").assertIsDisplayed()
+        rule.onNodeWithContentDescription("바로가기 링크: 가성비 방향제 찾아보기").assertIsDisplayed()
         hideKeyboard()
-        saveScreenshot("preview7-product-shortcut.png")
+        saveScreenshot("preview8-correct-product-shortcut.png")
     }
 
     private fun saveScreenshot(name: String) {

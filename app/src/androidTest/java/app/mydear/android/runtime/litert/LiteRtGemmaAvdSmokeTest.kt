@@ -20,7 +20,7 @@ class LiteRtGemmaAvdSmokeTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val model = context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm")
         assumeTrue("AVD Gemma smoke model was not staged", model.isFile)
-        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-gemma-smoke"))
+        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-qa-e2b-shared"))
         try {
             withTimeout(150_000) {
                 engine.prepare(InstalledModel("gemma-4-e2b-it-mobile", model.absolutePath, "qa-staged"))

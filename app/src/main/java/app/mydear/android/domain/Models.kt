@@ -27,6 +27,8 @@ data class ConversationRequest(
     val messages: List<ChatMessage>,
     val evidence: SearchEvidence? = null,
     val memories: List<String> = emptyList(),
+    val screenText: String? = null,
+    val screenImage: ByteArray? = null,
 )
 data class SearchRequest(val query: String, val locale: String = "ko-KR")
 data class SearchEvidence(val documents: List<SearchDocument>)
@@ -57,16 +59,19 @@ data class InstalledModel(
 sealed interface SttEvent {
     data class Partial(val text: String) : SttEvent
     data class Final(val text: String) : SttEvent
+    data object ModelDownloadRequired : SttEvent
     data class Failure(val reason: String) : SttEvent
 }
 
 interface SpeechToTextEngine {
     suspend fun availability(locale: Locale): SttAvailability
+    suspend fun requestLanguageModel(locale: Locale): SttModelRequest
     fun recognize(turnId: TurnId, locale: Locale): Flow<SttEvent>
     suspend fun cancel(turnId: TurnId)
 }
 
 enum class SttAvailability { Ready, ModelDownloadRequired, Unsupported }
+enum class SttModelRequest { Ready, Scheduled, ManualInstallRequired, Failed }
 data class PcmChunk(val samples: ShortArray, val sampleRate: Int)
 
 interface TextToSpeechEngine {

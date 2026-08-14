@@ -20,7 +20,7 @@ import org.junit.Test
 
 class KoreanAnswerQualityGemmaAvdTest {
     @Test fun answersGenericBlanketFoldingWithoutRepeatingClarification() = runBlocking {
-        withEngine("blanket") { engine ->
+        withEngine { engine ->
             val answer = engine.answer(
                 ConversationRequest(
                     TurnId("blanket"),
@@ -38,7 +38,7 @@ class KoreanAnswerQualityGemmaAvdTest {
     }
 
     @Test fun currentPresidentComesFromEvidenceInsteadOfGuessing() = runBlocking {
-        withEngine("current-fact") { engine ->
+        withEngine { engine ->
             val answer = engine.answer(
                 ConversationRequest(
                     TurnId("current-fact"),
@@ -61,11 +61,11 @@ class KoreanAnswerQualityGemmaAvdTest {
         }
     }
 
-    private suspend fun withEngine(suffix: String, block: suspend (LiteRtConversationEngine) -> Unit) {
+    private suspend fun withEngine(block: suspend (LiteRtConversationEngine) -> Unit) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val model = context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm")
         assumeTrue("AVD Gemma E2B model was not staged", model.isFile)
-        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-quality-$suffix"))
+        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-qa-e2b-shared"))
         try {
             withTimeout(240_000) {
                 engine.prepare(InstalledModel("gemma-4-e2b-it-mobile", model.absolutePath, "qa-staged"))

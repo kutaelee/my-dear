@@ -175,7 +175,9 @@ class ModelDownloadWorker(
         const val KEY_INSTALLED_TIER = "installed_tier"
         private const val CHANNEL_ID = "model_install"
         private const val NOTIFICATION_ID = 4102
-        private const val MIN_FREE_AFTER_INSTALL = 768L * 1024 * 1024
+        // LiteRT builds device-specific execution caches after installation. Keep enough room so
+        // native initialization never reaches an unrecoverable ENOSPC abort.
+        private const val MIN_FREE_AFTER_INSTALL = 1_600_000_000L
 
         fun workName(tier: GemmaTier) = "gemma-${tier.name.lowercase()}-install"
 

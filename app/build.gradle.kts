@@ -14,8 +14,8 @@ android {
         applicationId = "app.mydear.android"
         minSdk = 31
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.1.3"
+        versionCode = 4
+        versionName = "0.1.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         val searchEndpoint = providers.gradleProperty("MY_DEAR_SEARCH_ENDPOINT").orNull.orEmpty()
@@ -72,6 +72,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.0")
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1")
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("org.apache.commons:commons-compress:1.28.0")
     implementation(files("libs/sherpa-onnx-1.13.4.aar"))

@@ -20,7 +20,7 @@ class LiteRtConversationKvCacheAvdTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val model = context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm")
         assumeTrue("Stage the pinned QA model first", model.isFile)
-        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-kv-cache"))
+        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-qa-e2b-shared"))
         try {
             engine.prepare(InstalledModel("qa-e2b", model.absolutePath, "qa", ModelBackend.Cpu))
             val firstUser = ChatMessage("kv-user-1", Role.User, "이번 대화에서 암호는 바다별이라고 기억해 주세요. 짧게 확인만 해주세요.")

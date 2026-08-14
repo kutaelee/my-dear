@@ -23,7 +23,7 @@ class SearchInjectionGemmaAvdTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val model = context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm")
         assumeTrue("AVD Gemma E2B smoke model was not staged", model.isFile)
-        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-search-injection"))
+        val engine = LiteRtConversationEngine(context.cacheDir.resolve("litert-qa-e2b-shared"))
         try {
             withTimeout(180_000) {
                 engine.prepare(InstalledModel("gemma-4-e2b-it-mobile", model.absolutePath, "qa-staged"))

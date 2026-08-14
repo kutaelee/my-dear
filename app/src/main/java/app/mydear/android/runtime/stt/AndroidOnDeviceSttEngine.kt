@@ -2,23 +2,32 @@ package app.mydear.android.runtime.stt
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.ModelDownloadListener
 import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.annotation.RequiresApi
 import app.mydear.android.domain.SpeechToTextEngine
 import app.mydear.android.domain.SttAvailability
 import app.mydear.android.domain.SttEvent
+import app.mydear.android.domain.SttModelRequest
 import app.mydear.android.domain.TurnId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
     private val appContext = context.applicationContext
@@ -26,8 +35,16 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override suspend fun availability(locale: Locale): SttAvailability = withContext(Dispatchers.Main.immediate) {
-        if (SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) SttAvailability.Ready
-        else SttAvailability.Unsupported
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) return@withContext SttAvailability.Unsupported
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@withContext SttAvailability.Ready
+        checkLanguageSupport(locale)
+    }
+
+    override suspend fun requestLanguageModel(locale: Locale): SttModelRequest = withContext(Dispatchers.Main.immediate) {
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) return@withContext SttModelRequest.ManualInstallRequired
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@withContext SttModelRequest.ManualInstallRequired
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) requestLanguageModelWithProgress(locale)
+        else requestLanguageModelWithoutProgress(locale)
     }
 
     override fun recognize(turnId: TurnId, locale: Locale): Flow<SttEvent> = callbackFlow {
@@ -57,19 +74,18 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
                 close()
             }
             override fun onError(error: Int) {
-                trySend(SttEvent.Failure(userMessage(error)))
+                if (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE || error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+                    trySend(SttEvent.ModelDownloadRequired)
+                } else {
+                    trySend(SttEvent.Failure(userMessage(error)))
+                }
                 close()
             }
         }
 
         withContext(Dispatchers.Main.immediate) {
             recognizer.setRecognitionListener(listener)
-            recognizer.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale.toLanguageTag())
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            })
+            recognizer.startListening(recognitionIntent(locale))
         }
 
         awaitClose {
@@ -95,6 +111,103 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
         ?.trim()
         ?.takeIf(String::isNotEmpty)
 
+    private fun recognitionIntent(locale: Locale) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale.toLanguageTag())
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale.toLanguageTag())
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private suspend fun checkLanguageSupport(locale: Locale): SttAvailability = suspendCancellableCoroutine { continuation ->
+        val recognizer = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) }.getOrElse {
+            continuation.resume(SttAvailability.Unsupported)
+            return@suspendCancellableCoroutine
+        }
+        val completed = AtomicBoolean(false)
+        fun complete(result: SttAvailability) {
+            if (!completed.compareAndSet(false, true)) return
+            if (continuation.isActive) continuation.resume(result)
+            recognizer.destroy()
+        }
+        continuation.invokeOnCancellation {
+            if (completed.compareAndSet(false, true)) mainHandler.post(recognizer::destroy)
+        }
+        runCatching {
+            recognizer.checkRecognitionSupport(
+                recognitionIntent(locale),
+                appContext.mainExecutor,
+                object : RecognitionSupportCallback {
+                    override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+                        complete(
+                            resolveLanguageSupport(
+                                recognitionSupport.installedOnDeviceLanguages,
+                                recognitionSupport.pendingOnDeviceLanguages,
+                                recognitionSupport.supportedOnDeviceLanguages,
+                                locale,
+                            ),
+                        )
+                    }
+
+                    override fun onError(error: Int) {
+                        complete(
+                            if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) SttAvailability.Unsupported
+                            else SttAvailability.Ready,
+                        )
+                    }
+                },
+            )
+        }.onFailure { complete(SttAvailability.Ready) }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun requestLanguageModelWithoutProgress(locale: Locale): SttModelRequest {
+        val recognizer = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) }.getOrNull()
+            ?: return SttModelRequest.ManualInstallRequired
+        return try {
+            recognizer.triggerModelDownload(recognitionIntent(locale))
+            SttModelRequest.Scheduled
+        } catch (_: Exception) {
+            SttModelRequest.ManualInstallRequired
+        } finally {
+            recognizer.destroy()
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private suspend fun requestLanguageModelWithProgress(locale: Locale): SttModelRequest = suspendCancellableCoroutine { continuation ->
+        val recognizer = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) }.getOrElse {
+            continuation.resume(SttModelRequest.ManualInstallRequired)
+            return@suspendCancellableCoroutine
+        }
+        val completed = AtomicBoolean(false)
+        fun complete(result: SttModelRequest) {
+            if (!completed.compareAndSet(false, true)) return
+            if (continuation.isActive) continuation.resume(result)
+            recognizer.destroy()
+        }
+        continuation.invokeOnCancellation {
+            if (completed.compareAndSet(false, true)) mainHandler.post(recognizer::destroy)
+        }
+        runCatching {
+            recognizer.triggerModelDownload(
+                recognitionIntent(locale),
+                appContext.mainExecutor,
+                object : ModelDownloadListener {
+                    override fun onProgress(completedPercent: Int) = Unit
+                    override fun onSuccess() = complete(SttModelRequest.Ready)
+                    override fun onScheduled() = complete(SttModelRequest.Scheduled)
+                    override fun onError(error: Int) = complete(
+                        if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) SttModelRequest.ManualInstallRequired
+                        else SttModelRequest.Failed,
+                    )
+                },
+            )
+        }.onFailure { complete(SttModelRequest.ManualInstallRequired) }
+    }
+
     private fun userMessage(code: Int): String = when (code) {
         SpeechRecognizer.ERROR_NO_MATCH -> "말씀을 알아듣지 못했어요. 다시 말씀해 주세요."
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "말씀이 들리지 않았어요. 다시 눌러 주세요."
@@ -104,4 +217,22 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "잠시 후 다시 말씀해 주세요."
         else -> "음성 인식에 문제가 생겼어요. 다시 시도해 주세요."
     }
+}
+
+internal fun resolveLanguageSupport(
+    installed: Collection<String>,
+    pending: Collection<String>,
+    supported: Collection<String>,
+    locale: Locale,
+): SttAvailability = when {
+    installed.supportsLanguage(locale) -> SttAvailability.Ready
+    pending.supportsLanguage(locale) -> SttAvailability.ModelDownloadRequired
+    supported.supportsLanguage(locale) -> SttAvailability.ModelDownloadRequired
+    installed.isEmpty() && pending.isEmpty() && supported.isEmpty() -> SttAvailability.Ready
+    else -> SttAvailability.Unsupported
+}
+
+internal fun Collection<String>.supportsLanguage(locale: Locale): Boolean = any { tag ->
+    val candidate = Locale.forLanguageTag(tag.replace('_', '-'))
+    candidate.language.equals(locale.language, ignoreCase = true)
 }

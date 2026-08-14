@@ -6,8 +6,8 @@ import app.mydear.android.domain.ModelBackend
 import java.io.File
 
 enum class GemmaTier(val label: String, val shortDescription: String) {
-    E2B("기본 AI", "일상 대화에 알맞아요 · 약 2.6GB"),
-    E4B("고급 AI", "더 자세한 답변 · 약 3GB · 고성능 휴대폰용"),
+    E2B("기본 AI", "일상 대화에 알맞아요 · 준비 공간 약 4GB"),
+    E4B("고급 AI", "더 자세한 답변 · 준비 공간 약 4.5GB · 고성능 휴대폰용"),
 }
 
 data class GemmaArtifact(

@@ -18,4 +18,39 @@ class MemoryContextBoundaryTest {
         assertEquals(listOf("new-user"), messagesAfterMemoryBoundary(messages, "forget-answer").map { it.id })
         assertEquals(emptyList<ChatMessage>(), messagesAfterMemoryBoundary(messages, "expired-boundary"))
     }
+
+    @Test fun latestOfMultiplePrivacyBoundariesWins() {
+        val messages = listOf(
+            ChatMessage("before", Role.User, "공유 전 질문"),
+            ChatMessage("screen-answer", Role.Assistant, "공유 화면 답변"),
+            ChatMessage("after", Role.User, "공유 종료 후 질문"),
+        )
+
+        assertEquals(
+            listOf("after"),
+            messagesAfterBoundaries(messages, listOf("before", "screen-answer")).map { it.id },
+        )
+    }
+
+    @Test fun missingPrivacyBoundaryFailsClosed() {
+        val messages = listOf(
+            ChatMessage("screen-answer", Role.Assistant, "공유 화면 답변"),
+            ChatMessage("after", Role.User, "공유 종료 후 질문"),
+        )
+
+        assertEquals(emptyList<ChatMessage>(), messagesAfterBoundaries(messages, listOf("missing", "screen-answer")))
+    }
+
+    @Test fun assistantPlaceholderBoundaryExcludesPartialScreenAnswerAfterProcessDeath() {
+        val messages = listOf(
+            ChatMessage("screen-user", Role.User, "이 화면에서 어디를 눌러?"),
+            ChatMessage("screen-answer", Role.Assistant, "오른쪽 아래의 설"),
+            ChatMessage("after-restart", Role.User, "새 질문"),
+        )
+
+        assertEquals(
+            listOf("after-restart"),
+            messagesAfterBoundaries(messages, listOf("screen-answer")).map { it.id },
+        )
+    }
 }

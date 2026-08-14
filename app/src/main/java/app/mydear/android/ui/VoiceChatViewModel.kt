@@ -12,14 +12,19 @@ import app.mydear.android.domain.SearchEvidence
 import app.mydear.android.domain.SearchRequest
 import app.mydear.android.domain.SttAvailability
 import app.mydear.android.domain.SttEvent
+import app.mydear.android.domain.SttModelRequest
 import app.mydear.android.domain.TurnId
 import app.mydear.android.runtime.stt.AndroidOnDeviceSttEngine
 import app.mydear.android.runtime.audio.AudioTrackPcmOutput
 import app.mydear.android.runtime.litert.LiteRtConversationEngine
+import app.mydear.android.runtime.litert.InsufficientRuntimeStorageException
 import app.mydear.android.runtime.sherpa.SupertonicTtsEngine
 import app.mydear.android.runtime.search.HttpsSearchProxyGateway
 import app.mydear.android.runtime.search.InternetSearchException
 import app.mydear.android.runtime.search.PublicInternetSearchGateway
+import app.mydear.android.runtime.screen.ScreenShareSession
+import app.mydear.android.runtime.screen.ScreenShareState
+import app.mydear.android.runtime.screen.ScreenContextBoundaryStore
 import app.mydear.android.search.InternetQueryPolicy
 import app.mydear.android.search.SearchAnswerPolicy
 import app.mydear.android.BuildConfig
@@ -32,12 +37,14 @@ import app.mydear.android.memory.LocalMemoryRetriever
 import app.mydear.android.memory.MemoryCommand
 import app.mydear.android.memory.MemoryIntentParser
 import app.mydear.android.memory.MemoryContextBoundaryStore
+import app.mydear.android.memory.messagesAfterBoundaries
 import app.mydear.android.memory.messagesAfterMemoryBoundary
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import app.mydear.android.voice.VoiceEvent
 import app.mydear.android.voice.VoiceReducer
 import app.mydear.android.voice.VoiceState
@@ -79,6 +86,7 @@ data class ChatUiState(
     val searchConfigured: Boolean = false,
     val savedMemories: List<String> = emptyList(),
     val pendingTool: ToolProposal? = null,
+    val speechSettingsRequired: Boolean = false,
 )
 
 class VoiceChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -88,7 +96,8 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     private val chatStore = EncryptedChatStore(application)
     private val memoryStore = EncryptedMemoryStore(application)
     private val memoryContextBoundary = MemoryContextBoundaryStore(application)
-    private val conversation = LiteRtConversationEngine(application.cacheDir.resolve("litert-chat"))
+    private val screenContextBoundary = ScreenContextBoundaryStore(application)
+    private val conversation = LiteRtConversationEngine(application.cacheDir.resolve("litert-chat-v2-vision"))
     private val tts = SupertonicTtsEngine()
     private val audioOutput = AudioTrackPcmOutput()
     private val initialTier = modelPreferences.selectedTier()
@@ -121,10 +130,23 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            // Preview 5 enables the vision executor. Old text-only LiteRT caches are incompatible and recoverable.
+            runCatching { application.cacheDir.resolve("litert-chat").deleteRecursively() }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
             state.map { it.messages }.distinctUntilChanged().drop(1).collectLatest { messages ->
                 delay(500)
                 chatStore.save(messages)
             }
+        }
+        viewModelScope.launch {
+            ScreenShareSession.state
+                .map { it == ScreenShareState.Active }
+                .distinctUntilChanged()
+                .drop(1)
+                .collectLatest { active ->
+                    if (!active) resetSharedScreenInferenceContext()
+                }
         }
         restoreActiveDownloads()
     }
@@ -191,29 +213,72 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 startRecognition = {
                     val turnId = TurnId.create()
                     val transition = VoiceReducer.reduce(state.value.voiceState, VoiceEvent.StartListening(turnId))
-                    mutableState.update { it.copy(voiceState = transition.state, notice = "휴대폰 안에서 듣고 있어요") }
-                    when (stt.availability(Locale.KOREAN)) {
-                SttAvailability.Ready -> stt.recognize(turnId, Locale.KOREAN).collect { event ->
-                    when (event) {
-                        is SttEvent.Partial -> mutableState.update { it.copy(draft = event.text, notice = "듣고 있어요") }
-                        is SttEvent.Final -> {
-                            mutableState.update {
-                                it.copy(
-                                    draft = "",
-                                    voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.SpeechAccepted(turnId)).state,
-                                    notice = null,
-                                )
-                            }
-                            requestAnswer(event.text, speak = true, turnId = turnId)
-                        }
-                        is SttEvent.Failure -> failVoice(event.reason)
+                    mutableState.update {
+                        it.copy(voiceState = transition.state, notice = "휴대폰 안에서 듣고 있어요", speechSettingsRequired = false)
                     }
-                }
-                SttAvailability.ModelDownloadRequired -> failVoice("한국어 음성 인식 모델을 먼저 받아 주세요.")
-                SttAvailability.Unsupported -> failVoice("이 휴대폰은 오프라인 음성 인식을 지원하지 않아요. 글로는 계속 이용할 수 있어요.")
+                    val locale = Locale.KOREA
+                    when (stt.availability(locale)) {
+                        SttAvailability.Ready -> collectSpeech(turnId, locale)
+                        SttAvailability.ModelDownloadRequired -> {
+                            if (requestKoreanSpeechModel(locale)) collectSpeech(turnId, locale)
+                        }
+                        SttAvailability.Unsupported -> failVoice(
+                            "이 휴대폰의 오프라인 음성 인식에서 한국어를 지원하지 않아요. 글로는 계속 이용할 수 있어요.",
+                            showSpeechSettings = true,
+                        )
                     }
                 },
             )
+        }
+    }
+
+    private suspend fun collectSpeech(turnId: TurnId, locale: Locale) {
+        stt.recognize(turnId, locale).collect { event ->
+            when (event) {
+                is SttEvent.Partial -> mutableState.update { it.copy(draft = event.text, notice = "듣고 있어요") }
+                is SttEvent.Final -> {
+                    mutableState.update {
+                        it.copy(
+                            draft = "",
+                            voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.SpeechAccepted(turnId)).state,
+                            notice = null,
+                        )
+                    }
+                    requestAnswer(event.text, speak = true, turnId = turnId)
+                }
+                SttEvent.ModelDownloadRequired -> {
+                    requestKoreanSpeechModel(locale, retryAfterReady = true)
+                }
+                is SttEvent.Failure -> failVoice(event.reason)
+            }
+        }
+    }
+
+    private suspend fun requestKoreanSpeechModel(locale: Locale, retryAfterReady: Boolean = false): Boolean {
+        mutableState.update { it.copy(notice = "한국어 음성 인식을 준비하고 있어요") }
+        val request = withTimeoutOrNull(30_000) { stt.requestLanguageModel(locale) } ?: SttModelRequest.Failed
+        return when (request) {
+            SttModelRequest.Ready -> {
+                if (retryAfterReady) {
+                    failVoice("한국어 음성 인식 준비가 끝났어요. 마이크를 다시 눌러 주세요.")
+                    false
+                } else {
+                    mutableState.update { it.copy(notice = "한국어 음성 인식 준비가 끝났어요") }
+                    true
+                }
+            }
+            SttModelRequest.Scheduled -> {
+                failVoice("한국어 음성 인식 다운로드를 요청했어요. 인터넷에 연결한 뒤 잠시 후 마이크를 다시 눌러 주세요.")
+                false
+            }
+            SttModelRequest.ManualInstallRequired -> {
+                failVoice("휴대폰 설정에서 한국어 음성 인식을 받아 주세요.", showSpeechSettings = true)
+                false
+            }
+            SttModelRequest.Failed -> {
+                failVoice("한국어 음성 인식을 받지 못했어요. 인터넷 연결을 확인하고 다시 눌러 주세요.")
+                false
+            }
         }
     }
 
@@ -229,7 +294,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         listeningJob?.cancel()
         listeningJob = null
         if (turnId != null) viewModelScope.launch { stt.cancel(turnId) }
-        mutableState.update { it.copy(voiceState = VoiceState.Idle, notice = null) }
+        mutableState.update { it.copy(voiceState = VoiceState.Idle, notice = null, speechSettingsRequired = false) }
     }
 
     fun selectModelTier(tier: GemmaTier) {
@@ -448,15 +513,45 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     conversation.prepare(model)
                     preparedModelId = model.id
                 }
-                val requestMessages = messagesAfterMemoryBoundary(
-                    state.value.messages.filter { it.id != assistantId },
-                    memoryContextBoundary.messageId(),
-                ).takeLast(12)
+                val screenFrame = if (ScreenShareSession.state.value == ScreenShareState.Active) {
+                    mutableState.update { it.copy(notice = "공유한 화면을 살펴보고 있어요") }
+                    ScreenShareSession.captureFrame().getOrNull().also { captured ->
+                        if (captured == null) {
+                            mutableState.update { it.copy(notice = "공유 화면을 가져오지 못했어요. 질문에는 계속 답할게요.") }
+                        }
+                    }
+                } else null
+                val allRequestMessages = state.value.messages.filter { it.id != assistantId }
+                val requestMessages = if (ScreenShareSession.state.value == ScreenShareState.Active) {
+                    messagesAfterMemoryBoundary(allRequestMessages, memoryContextBoundary.messageId())
+                } else {
+                    messagesAfterBoundaries(
+                        allRequestMessages,
+                        listOf(memoryContextBoundary.messageId(), screenContextBoundary.messageId()),
+                    )
+                }.takeLast(12)
+                // Persist the assistant placeholder before inference. If the process dies while streaming,
+                // both partial output and the screen-derived user turn remain at or before this boundary.
+                val screenBoundarySaved = screenFrame == null || withContext(Dispatchers.IO) {
+                    screenContextBoundary.markAfter(assistantId)
+                }
+                if (!screenBoundarySaved) {
+                    throw IllegalStateException("화면 내용을 안전하게 분리하지 못했어요. 화면 공유를 멈춘 뒤 다시 시작해 주세요.")
+                }
                 val memories = withContext(Dispatchers.IO) {
                     LocalMemoryRetriever.retrieve(memoryStore.load(), text).map { it.text }
                 }
                 val webBuffer = StringBuilder()
-                conversation.stream(ConversationRequest(turnId, requestMessages, evidence, memories)).collect { event ->
+                conversation.stream(
+                    ConversationRequest(
+                        turnId = turnId,
+                        messages = requestMessages,
+                        evidence = evidence,
+                        memories = memories,
+                        screenText = screenFrame?.recognizedText,
+                        screenImage = screenFrame?.jpegBytes,
+                    ),
+                ).collect { event ->
                     when (event) {
                         is ConversationEvent.TextDelta -> if (evidence == null) {
                             appendAssistantText(assistantId, event.value, turnId)
@@ -486,8 +581,12 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 else finishAnswer(turnId)
             } catch (error: Exception) {
                 if (activeTurnId == turnId) {
-                    val userMessage = if (error is InternetSearchException) error.message.orEmpty()
-                    else "답변을 만들지 못했어요. 모델을 다시 준비한 뒤 시도해 주세요."
+                    val userMessage = when (error) {
+                        is InternetSearchException,
+                        is InsufficientRuntimeStorageException,
+                        -> error.message.orEmpty()
+                        else -> "답변을 만들지 못했어요. 모델을 다시 준비한 뒤 시도해 주세요."
+                    }
                     replaceAssistantText(assistantId, userMessage)
                     mutableState.update { it.copy(notice = null, isGenerating = false, voiceState = VoiceState.Failed(userMessage)) }
                     activeTurnId = null
@@ -655,6 +754,18 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private suspend fun resetSharedScreenInferenceContext() {
+        detachActiveAnswer()?.let { (turnId, generation) ->
+            runCatching { conversation.cancel(turnId) }
+            runCatching { tts.cancel(turnId) }
+            runCatching { audioOutput.abort(generation) }
+        }
+        runCatching { conversation.resetContext() }
+        mutableState.update {
+            it.copy(notice = "화면 공유를 마쳤고, 읽었던 화면 내용도 AI 기억에서 지웠어요.")
+        }
+    }
+
     private fun detachActiveAnswer(): Pair<TurnId, Long>? {
         val turnId = activeTurnId ?: return null
         activeTurnId = null
@@ -665,9 +776,13 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         return turnId to generation
     }
 
-    private fun failVoice(message: String) {
+    private fun failVoice(message: String, showSpeechSettings: Boolean = false) {
         mutableState.update {
-            it.copy(voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.Failure(message)).state, notice = message)
+            it.copy(
+                voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.Failure(message)).state,
+                notice = message,
+                speechSettingsRequired = showSpeechSettings,
+            )
         }
     }
 

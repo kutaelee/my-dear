@@ -21,7 +21,13 @@ class MemoryContextBoundaryStore(context: Context) {
 }
 
 internal fun messagesAfterMemoryBoundary(messages: List<ChatMessage>, boundaryMessageId: String?): List<ChatMessage> {
-    if (boundaryMessageId.isNullOrBlank()) return messages
-    val boundaryIndex = messages.indexOfLast { it.id == boundaryMessageId }
-    return if (boundaryIndex >= 0) messages.drop(boundaryIndex + 1) else emptyList()
+    return messagesAfterBoundaries(messages, listOf(boundaryMessageId))
+}
+
+internal fun messagesAfterBoundaries(messages: List<ChatMessage>, boundaryMessageIds: List<String?>): List<ChatMessage> {
+    val ids = boundaryMessageIds.filterNotNull().filter { it.isNotBlank() }
+    if (ids.isEmpty()) return messages
+    val boundaryIndices = ids.map { id -> messages.indexOfLast { it.id == id } }
+    if (boundaryIndices.any { it < 0 }) return emptyList()
+    return messages.drop(boundaryIndices.max() + 1)
 }

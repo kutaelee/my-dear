@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -17,6 +18,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTextInput
 import androidx.test.platform.app.InstrumentationRegistry
 import app.mydear.android.MainActivity
+import app.mydear.android.runtime.screen.ScreenContextBoundaryStore
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -42,10 +44,14 @@ class MyDearAppTest {
             .edit()
             .clear()
             .commit()
+        context
+            .getSharedPreferences(ScreenContextBoundaryStore.FILE_NAME, 0)
+            .edit()
+            .clear()
+            .commit()
         context.filesDir.resolve("private-chat").deleteRecursively()
         context.filesDir.resolve("private-memory").deleteRecursively()
         context.filesDir.resolve("models/active-gemma-4-e2b-it-mobile.txt").delete()
-        context.filesDir.resolve("qa/gemma-4-E2B-it.litertlm").delete()
         rule.activityRule.scenario.recreate()
         rule.waitForIdle()
     }
@@ -61,6 +67,14 @@ class MyDearAppTest {
         assertEquals(1, rule.onAllNodesWithText("채팅").fetchSemanticsNodes().size)
         assertEquals(1, rule.onAllNodesWithText("채팅 목록").fetchSemanticsNodes().size)
         assertEquals(1, rule.onAllNodesWithText("설정").fetchSemanticsNodes().size)
+    }
+
+    @Test fun screenShareControlIsVisibleAndExplainsPrivacyBeforeSystemConsent() {
+        skipTutorial()
+        rule.onNodeWithTag("screen-share-control").assertIsDisplayed().performClick()
+        rule.onNodeWithText("화면을 함께 볼까요?").assertIsDisplayed()
+        rule.onNodeWithText("화면은 저장하거나 인터넷으로 보내지 않아요.", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("화면 선택하기").assertIsDisplayed()
     }
 
     @Test fun tutorialCanAdvanceAndBeSkippedWithoutPermissions() {
@@ -105,6 +119,9 @@ class MyDearAppTest {
 
     @Test fun internetHelpIsOnByDefaultAndCanBeTurnedOff() {
         skipTutorial()
+        assertEquals(0, rule.onAllNodesWithTag("internet-toggle").fetchSemanticsNodes().size)
+        rule.onNodeWithText("설정").performClick()
+        rule.onNodeWithTag("settings-list").performScrollToNode(hasTestTag("internet-toggle"))
         rule.onNodeWithContentDescription("인터넷 도움").assertIsDisplayed()
         rule.onNodeWithTag("internet-toggle").assertIsOn().performClick()
         rule.waitForIdle()
@@ -140,8 +157,8 @@ class MyDearAppTest {
             rule.onAllNodesWithText("현재 대한민국 대통령은 이재명입니다.", substring = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        rule.onNodeWithText("현재 대한민국 대통령은 이재명입니다.", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("출처").assertIsDisplayed()
+        rule.onNodeWithText("현재 대한민국 대통령은 이재명입니다.", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("출처").performScrollTo().assertIsDisplayed()
         rule.onNodeWithContentDescription("출처 링크: 대한민국 대통령 목록")
             .assertIsDisplayed()
             .assertHasClickAction()

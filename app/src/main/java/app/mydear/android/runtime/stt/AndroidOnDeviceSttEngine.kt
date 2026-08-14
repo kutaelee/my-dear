@@ -29,18 +29,29 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
-class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
+class AndroidOnDeviceSttEngine(
+    context: Context,
+    private val useSystemSpeechService: Boolean = false,
+) : SpeechToTextEngine {
     private val appContext = context.applicationContext
     private val active = ConcurrentHashMap<TurnId, SpeechRecognizer>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override suspend fun availability(locale: Locale): SttAvailability = withContext(Dispatchers.Main.immediate) {
+        if (useSystemSpeechService) {
+            return@withContext if (SpeechRecognizer.isRecognitionAvailable(appContext)) {
+                SttAvailability.Ready
+            } else {
+                SttAvailability.Unsupported
+            }
+        }
         if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) return@withContext SttAvailability.Unsupported
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@withContext SttAvailability.Ready
         checkLanguageSupport(locale)
     }
 
     override suspend fun requestLanguageModel(locale: Locale): SttModelRequest = withContext(Dispatchers.Main.immediate) {
+        if (useSystemSpeechService) return@withContext SttModelRequest.Ready
         if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) return@withContext SttModelRequest.ManualInstallRequired
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@withContext SttModelRequest.ManualInstallRequired
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) requestLanguageModelWithProgress(locale)
@@ -49,10 +60,17 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
 
     override fun recognize(turnId: TurnId, locale: Locale): Flow<SttEvent> = callbackFlow {
         val recognizer = withContext(Dispatchers.Main.immediate) {
-            check(SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) {
-                "이 휴대폰에는 온디바이스 음성 인식이 준비되지 않았어요"
+            if (useSystemSpeechService) {
+                check(SpeechRecognizer.isRecognitionAvailable(appContext)) {
+                    "이 휴대폰에는 기본 음성 입력 서비스가 준비되지 않았어요"
+                }
+                SpeechRecognizer.createSpeechRecognizer(appContext)
+            } else {
+                check(SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) {
+                    "이 휴대폰에는 온디바이스 음성 인식이 준비되지 않았어요"
+                }
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             }
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
         }
         val previous = active.putIfAbsent(turnId, recognizer)
         check(previous == null) { "이미 음성을 듣고 있어요" }
@@ -74,11 +92,7 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
                 close()
             }
             override fun onError(error: Int) {
-                if (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE || error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
-                    trySend(SttEvent.ModelDownloadRequired)
-                } else {
-                    trySend(SttEvent.Failure(userMessage(error)))
-                }
+                trySend(recognitionErrorEvent(error))
                 close()
             }
         }
@@ -105,6 +119,17 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
         Unit
     }
 
+    internal fun recognitionErrorEvent(error: Int): SttEvent =
+        if (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE || error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+            if (useSystemSpeechService) {
+                SttEvent.Failure("휴대폰 기본 음성 입력에서 한국어를 사용할 수 없어요")
+            } else {
+                SttEvent.ModelDownloadRequired
+            }
+        } else {
+            SttEvent.Failure(userMessage(error))
+        }
+
     private fun Bundle?.bestTranscript(): String? = this
         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
         ?.firstOrNull()
@@ -115,7 +140,7 @@ class AndroidOnDeviceSttEngine(context: Context) : SpeechToTextEngine {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale.toLanguageTag())
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale.toLanguageTag())
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, !useSystemSpeechService)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
     }

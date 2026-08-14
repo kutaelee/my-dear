@@ -25,6 +25,21 @@ class ConversationPromptTest {
         assertTrue(prompt.contains("일반적인 X로 이해"))
         assertTrue(prompt.contains("반복하지 말고 바로 고쳐 답하세요"))
         assertTrue(prompt.contains("3~5단계"))
+        assertTrue(prompt.contains("첫 문장에 사용자가 요청한 결과"))
+        assertTrue(prompt.contains("요청한 형식과 항목을 빠뜨리지 마세요"))
+    }
+
+    @Test fun requestedProductNamesAndLinksMustNotBecomeALongGenericExplanation() {
+        val prompt = buildConversationPrompt(
+            ConversationRequest(
+                TurnId("product-link"),
+                listOf(ChatMessage("1", Role.User, "제품명이랑 링크줘")),
+            ),
+        )
+
+        assertTrue(prompt.contains("제품명, 링크, 목록처럼 결과물을 지정하면 그 결과물부터 제시"))
+        assertTrue(prompt.contains("대신 일반론을 길게 설명하지 마세요"))
+        assertTrue(MAX_OUTPUT_TOKENS >= 512)
     }
 
     @Test fun unstableFactRequiresEvidenceAndCitation() {

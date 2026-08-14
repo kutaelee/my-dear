@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,6 +21,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import app.mydear.android.MainActivity
 import app.mydear.android.runtime.screen.ScreenContextBoundaryStore
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Before
@@ -195,6 +197,30 @@ class MyDearAppTest {
             .assertHasClickAction()
         assertEquals(0, rule.onAllNodesWithText("ko.wikipedia.org", substring = true).fetchSemanticsNodes().size)
         assertEquals(0, rule.onAllNodesWithText("w/api.php", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun productLinkFollowUpShowsAnActualUserFacingShortcut() {
+        skipTutorial()
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("가성비 좋은 북쉘프 스피커 추천해줘")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("오프라인 AI가 아직 준비되지 않았어요", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("제품명이랑 링크줘")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithTag("answer-loading").fetchSemanticsNodes().isEmpty()
+        }
+        val shortcutLabels = rule.onAllNodesWithText("바로가기")
+        val shortcutCount = shortcutLabels.fetchSemanticsNodes().size
+        shortcutLabels[shortcutCount - 1].performScrollTo().assertIsDisplayed()
+        assertTrue(shortcutCount >= 1)
+        assertTrue(
+            rule.onAllNodesWithContentDescription(
+                "바로가기 링크: 가성비 좋은 북쉘프 스피커 찾아보기",
+            ).fetchSemanticsNodes().isNotEmpty(),
+        )
     }
 
     @Test fun explicitPersonalMemoryWorksWithoutModelAndCanBeReviewed() {

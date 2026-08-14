@@ -19,6 +19,7 @@ import com.google.ai.edge.litertlm.NoRepeatNgramConfig
 import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
@@ -36,25 +37,27 @@ class LiteRtConversationEngine(
     private var activeTurnId: TurnId? = null
     private var sessionUserMessageIds: List<String> = emptyList()
 
-    override suspend fun prepare(model: InstalledModel) = lifecycleMutex.withLock {
-        require(File(model.path).isFile) { "설치된 모델 파일을 찾을 수 없어요" }
-        releaseLocked()
-        val persistentCachePath = preparePersistentCachePath()
-        val nextEngine = Engine(
-            EngineConfig(
-                modelPath = model.path,
-                backend = if (model.backend == ModelBackend.Gpu) Backend.GPU() else Backend.CPU(),
-                visionBackend = if (model.backend == ModelBackend.Gpu) Backend.GPU() else Backend.CPU(),
-                maxNumImages = 1,
-                cacheDir = persistentCachePath,
-            ),
-        )
-        try {
-            nextEngine.initialize()
-            engine = nextEngine
-        } catch (error: Throwable) {
-            runCatching { nextEngine.close() }
-            throw error
+    override suspend fun prepare(model: InstalledModel) = withContext(Dispatchers.Default) {
+        lifecycleMutex.withLock {
+            require(File(model.path).isFile) { "설치된 모델 파일을 찾을 수 없어요" }
+            releaseLocked()
+            val persistentCachePath = preparePersistentCachePath()
+            val nextEngine = Engine(
+                EngineConfig(
+                    modelPath = model.path,
+                    backend = if (model.backend == ModelBackend.Gpu) Backend.GPU() else Backend.CPU(),
+                    visionBackend = if (model.backend == ModelBackend.Gpu) Backend.GPU() else Backend.CPU(),
+                    maxNumImages = 1,
+                    cacheDir = persistentCachePath,
+                ),
+            )
+            try {
+                nextEngine.initialize()
+                engine = nextEngine
+            } catch (error: Throwable) {
+                runCatching { nextEngine.close() }
+                throw error
+            }
         }
     }
 
@@ -144,7 +147,7 @@ class LiteRtConversationEngine(
         samplerConfig = SamplerConfig(topK = 24, topP = 0.85, temperature = 0.35),
         automaticToolCalling = false,
         prefillPrefaceOnInit = true,
-        maxOutputToken = 256,
+        maxOutputToken = MAX_OUTPUT_TOKENS,
     )
 
     private fun initialMessages(request: ConversationRequest): List<Message> = request.messages
@@ -180,9 +183,12 @@ class InsufficientRuntimeStorageException : IllegalStateException(
 
 internal fun conversationSystemInstruction(): String = buildString {
         appendLine("당신은 모든 성인이 편하게 쓰는 한국어 생활 도우미입니다. 존댓말로 짧고 정확하게 답하세요.")
-        appendLine("사용자의 철자와 띄어쓰기가 조금 틀려도 의도를 자연스럽게 이해하세요. 사용자가 하려는 일을 먼저 추론하고 바로 도움이 되는 답을 주세요.")
+        appendLine("첫 문장에 사용자가 요청한 결과나 다음 행동을 바로 주세요. 요청하지 않은 배경 설명, 사과, 면책 문구로 시작하지 마세요.")
+        appendLine("사용자의 철자와 띄어쓰기가 조금 틀려도 의도를 자연스럽게 이해하세요. 사용자가 하려는 일을 먼저 추론하고 요청한 형식과 항목을 빠뜨리지 마세요.")
         appendLine("'아무 담요나'처럼 '아무 X나'라고 하면 일반적인 X로 이해하세요. 안전이나 결과가 크게 달라지는 정보가 꼭 필요할 때만 질문을 한 번 하세요. 그 외에는 가장 일반적인 상황을 합리적으로 가정해 답하세요.")
+        appendLine("기본 답변은 2~4문장 또는 최대 5개 항목으로 끝내세요. 사용자가 자세히 요청했을 때만 늘리고, 마지막 문장은 반드시 끝까지 완성하세요.")
         appendLine("생활 방법은 핵심부터 3~5단계로 설명하세요. 굵게 표시하는 별표, 제목 표시, 이모지, 불필요한 영어 전문용어를 쓰지 마세요.")
+        appendLine("사용자가 제품명, 링크, 목록처럼 결과물을 지정하면 그 결과물부터 제시하세요. 확인할 자료가 없어 제공할 수 없다면 한 문장으로 이유를 말하고 바로 할 수 있는 다음 행동 하나만 제시하세요. 대신 일반론을 길게 설명하지 마세요.")
         appendLine("대통령, 날씨, 가격, 뉴스처럼 바뀔 수 있는 사실은 검색 자료가 없으면 이름이나 수치를 절대 추측하지 말고 인터넷 확인이 필요하다고 말하세요.")
         appendLine("이전 답변이 질문을 피했거나 같은 질문을 반복했다면 이번에는 반복하지 말고 바로 고쳐 답하세요.")
         appendLine("사용자의 질문을 그대로 되풀이하거나 질문인 척 답하지 마세요. 첫 문장부터 질문의 답을 말하세요.")
@@ -220,6 +226,9 @@ internal fun buildTurnPrompt(request: ConversationRequest): String = buildString
         appendLine("</UNTRUSTED_SEARCH_EVIDENCE>")
         appendLine("위 자료의 사실만 사용해 현재 질문에 바로 답하세요. 인용 표시는 앱이 출처 목록으로 연결합니다.")
     }
+    if (request.actionLinkAvailable) {
+        appendLine("앱이 답변 아래에 실제 제품 검색 바로가기를 표시합니다. URL을 만들지 말고, 알고 있는 범위에서 제품명은 최대 3개만 먼저 제시한 뒤 가격과 재고는 아래 바로가기에서 확인하라고 한 문장으로 끝내세요.")
+    }
     append("답변:")
 }.take(MAX_TURN_PROMPT_CHARS)
 
@@ -240,6 +249,7 @@ internal fun sessionCanContinue(
 }
 
 private const val MAX_INITIAL_MESSAGES = 10
+internal const val MAX_OUTPUT_TOKENS = 512
 private const val MAX_TURN_PROMPT_CHARS = 10_000
 private const val MAX_SESSION_TOKENS = 12_000
 private const val MAX_SCREEN_TEXT_CHARS = 6_000

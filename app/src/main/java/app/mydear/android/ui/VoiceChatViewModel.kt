@@ -14,6 +14,7 @@ import app.mydear.android.domain.InstalledModel
 import app.mydear.android.domain.SttAvailability
 import app.mydear.android.domain.SttEvent
 import app.mydear.android.domain.SttModelRequest
+import app.mydear.android.domain.SpeechToTextEngine
 import app.mydear.android.domain.TurnId
 import app.mydear.android.runtime.stt.AndroidOnDeviceSttEngine
 import app.mydear.android.runtime.audio.AudioTrackPcmOutput
@@ -28,6 +29,8 @@ import app.mydear.android.runtime.screen.ScreenShareState
 import app.mydear.android.runtime.screen.ScreenContextBoundaryStore
 import app.mydear.android.search.InternetQueryPolicy
 import app.mydear.android.search.SearchAnswerPolicy
+import app.mydear.android.search.ContextualActionLink
+import app.mydear.android.search.ContextualActionLinkPolicy
 import app.mydear.android.BuildConfig
 import app.mydear.android.models.GemmaTier
 import app.mydear.android.models.InstalledModelResolver
@@ -88,10 +91,12 @@ data class ChatUiState(
     val savedMemories: List<String> = emptyList(),
     val pendingTool: ToolProposal? = null,
     val speechSettingsRequired: Boolean = false,
+    val systemSpeechFallbackAvailable: Boolean = false,
 )
 
 class VoiceChatViewModel(application: Application) : AndroidViewModel(application) {
     private val stt = AndroidOnDeviceSttEngine(application)
+    private val systemStt = AndroidOnDeviceSttEngine(application, useSystemSpeechService = true)
     private val modelResolver = InstalledModelResolver(application)
     private val modelPreferences = ModelPreferenceStore(application)
     private val chatStore = EncryptedChatStore(application)
@@ -219,13 +224,14 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     val locale = Locale.KOREA
                     when (stt.availability(locale)) {
-                        SttAvailability.Ready -> collectSpeech(turnId, locale)
+                        SttAvailability.Ready -> collectSpeech(turnId, locale, stt)
                         SttAvailability.ModelDownloadRequired -> {
-                            if (requestKoreanSpeechModel(locale)) collectSpeech(turnId, locale)
+                            if (requestKoreanSpeechModel(locale)) collectSpeech(turnId, locale, stt)
                         }
                         SttAvailability.Unsupported -> failVoice(
                             "이 휴대폰의 오프라인 음성 인식에서 한국어를 지원하지 않아요. 글로는 계속 이용할 수 있어요.",
                             showSpeechSettings = true,
+                            showSystemFallback = true,
                         )
                     }
                 },
@@ -233,8 +239,35 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private suspend fun collectSpeech(turnId: TurnId, locale: Locale) {
-        stt.recognize(turnId, locale).collect { event ->
+    fun beginSystemVoiceCapture() {
+        stopVoiceMode()
+        listeningJob = viewModelScope.launch {
+            val locale = Locale.KOREA
+            if (systemStt.availability(locale) != SttAvailability.Ready) {
+                failVoice("휴대폰의 기본 음성 입력 서비스를 사용할 수 없어요.")
+                return@launch
+            }
+            val turnId = TurnId.create()
+            val transition = VoiceReducer.reduce(state.value.voiceState, VoiceEvent.StartListening(turnId))
+            mutableState.update {
+                it.copy(
+                    voiceState = transition.state,
+                    notice = "휴대폰 기본 음성 입력으로 듣고 있어요",
+                    speechSettingsRequired = false,
+                    systemSpeechFallbackAvailable = false,
+                )
+            }
+            collectSpeech(turnId, locale, systemStt)
+        }
+    }
+
+    private suspend fun collectSpeech(
+        turnId: TurnId,
+        locale: Locale,
+        engine: SpeechToTextEngine,
+    ) {
+        var retryOnDevice = false
+        engine.recognize(turnId, locale).collect { event ->
             when (event) {
                 is SttEvent.Partial -> mutableState.update { it.copy(draft = event.text, notice = "듣고 있어요") }
                 is SttEvent.Final -> {
@@ -248,39 +281,57 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     requestAnswer(event.text, speak = true, turnId = turnId)
                 }
                 SttEvent.ModelDownloadRequired -> {
-                    requestKoreanSpeechModel(locale, retryAfterReady = true)
+                    retryOnDevice = engine === stt && requestKoreanSpeechModel(locale)
                 }
-                is SttEvent.Failure -> failVoice(event.reason)
+                is SttEvent.Failure -> failVoice(event.reason, showSystemFallback = engine === stt)
             }
+        }
+        if (retryOnDevice && state.value.voiceState is VoiceState.Listening) {
+            collectSpeech(turnId, locale, stt)
         }
     }
 
-    private suspend fun requestKoreanSpeechModel(locale: Locale, retryAfterReady: Boolean = false): Boolean {
+    private suspend fun requestKoreanSpeechModel(locale: Locale): Boolean {
         mutableState.update { it.copy(notice = "한국어 음성 인식을 준비하고 있어요") }
         val request = withTimeoutOrNull(30_000) { stt.requestLanguageModel(locale) } ?: SttModelRequest.Failed
         return when (request) {
             SttModelRequest.Ready -> {
-                if (retryAfterReady) {
-                    failVoice("한국어 음성 인식 준비가 끝났어요. 마이크를 다시 눌러 주세요.")
-                    false
-                } else {
-                    mutableState.update { it.copy(notice = "한국어 음성 인식 준비가 끝났어요") }
-                    true
-                }
+                mutableState.update { it.copy(notice = "한국어 음성 인식 준비가 끝났어요") }
+                true
             }
             SttModelRequest.Scheduled -> {
-                failVoice("한국어 음성 인식 다운로드를 요청했어요. 인터넷에 연결한 뒤 잠시 후 마이크를 다시 눌러 주세요.")
-                false
+                awaitKoreanSpeechModel(locale)
             }
             SttModelRequest.ManualInstallRequired -> {
-                failVoice("휴대폰 설정에서 한국어 음성 인식을 받아 주세요.", showSpeechSettings = true)
+                failVoice(
+                    "오프라인 한국어 음성 모델이 없어요.",
+                    showSpeechSettings = true,
+                    showSystemFallback = true,
+                )
                 false
             }
             SttModelRequest.Failed -> {
-                failVoice("한국어 음성 인식을 받지 못했어요. 인터넷 연결을 확인하고 다시 눌러 주세요.")
+                failVoice("오프라인 한국어 음성 모델을 받지 못했어요.", showSystemFallback = true)
                 false
             }
         }
+    }
+
+    private suspend fun awaitKoreanSpeechModel(locale: Locale): Boolean {
+        mutableState.update { it.copy(notice = "한국어 음성 모델을 내려받고 있어요 · 끝내기를 누르면 취소돼요") }
+        repeat(45) {
+            delay(1_000)
+            when (stt.availability(locale)) {
+                SttAvailability.Ready -> return true
+                SttAvailability.Unsupported -> {
+                    failVoice("이 휴대폰은 오프라인 한국어 음성을 지원하지 않아요.", showSystemFallback = true)
+                    return false
+                }
+                SttAvailability.ModelDownloadRequired -> Unit
+            }
+        }
+        failVoice("오프라인 한국어 음성 준비가 늦어지고 있어요.", showSpeechSettings = true, showSystemFallback = true)
+        return false
     }
 
     fun microphonePermissionDenied(permanently: Boolean) {
@@ -295,7 +346,22 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         listeningJob?.cancel()
         listeningJob = null
         if (turnId != null) viewModelScope.launch { stt.cancel(turnId) }
-        mutableState.update { it.copy(voiceState = VoiceState.Idle, notice = null, speechSettingsRequired = false) }
+        mutableState.update {
+            it.copy(
+                voiceState = VoiceState.Idle,
+                notice = null,
+                speechSettingsRequired = false,
+                systemSpeechFallbackAvailable = false,
+            )
+        }
+    }
+
+    fun stopVoiceMode() {
+        when (state.value.voiceState) {
+            is VoiceState.PreparingAnswer, is VoiceState.Speaking -> cancelActiveAnswer()
+            else -> Unit
+        }
+        cancelVoice()
     }
 
     fun selectModelTier(tier: GemmaTier) {
@@ -488,6 +554,10 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun requestAnswer(text: String, speak: Boolean, turnId: TurnId = TurnId.create()) {
         cancelActiveAnswer()
+        val actionLink = ContextualActionLinkPolicy.create(
+            text,
+            state.value.messages.filter { it.role == Role.User }.map { it.text },
+        )
         val user = ChatMessage(UUID.randomUUID().toString(), Role.User, text)
         val assistantId = UUID.randomUUID().toString()
         LocalActionRouter.route(text, turnId.value)?.let { proposal ->
@@ -542,6 +612,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 if (model == null) {
                     val message = "오프라인 AI가 아직 준비되지 않았어요. 하단 ‘설정’의 ‘오프라인 AI 준비’에서 기본 AI를 내려받아 주세요."
                     replaceAssistantText(assistantId, message)
+                    actionLink?.let { attachActionLink(assistantId, it) }
                     finishAnswer(turnId)
                     return@launch
                 }
@@ -586,6 +657,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                         memories = memories,
                         screenText = screenFrame?.recognizedText,
                         screenImage = screenFrame?.jpegBytes,
+                        actionLinkAvailable = actionLink != null,
                     ),
                 ).collect { event ->
                     when (event) {
@@ -612,6 +684,8 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                         answer,
                         SearchAnswerPolicy.sourceIndices(rawAnswer, evidence.documents.size),
                     )
+                } else {
+                    actionLink?.let { attachActionLink(assistantId, it) }
                 }
                 if (speak && answer.isNotBlank()) speakAnswer(turnId, answer)
                 else finishAnswer(turnId)
@@ -790,6 +864,14 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         current.copy(messages = current.messages.map { if (it.id == messageId) it.copy(text = value) else it })
     }
 
+    private fun attachActionLink(messageId: String, link: ContextualActionLink) = mutableState.update { current ->
+        current.copy(
+            messages = current.messages.map { message ->
+                if (message.id == messageId) message.copy(provenance = Provenance.ActionLink(link.title, link.url)) else message
+            },
+        )
+    }
+
     private fun finishAnswer(turnId: TurnId) {
         if (activeTurnId != turnId) return
         activeTurnId = null
@@ -828,12 +910,17 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         return turnId to generation
     }
 
-    private fun failVoice(message: String, showSpeechSettings: Boolean = false) {
+    private fun failVoice(
+        message: String,
+        showSpeechSettings: Boolean = false,
+        showSystemFallback: Boolean = false,
+    ) {
         mutableState.update {
             it.copy(
                 voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.Failure(message)).state,
                 notice = message,
                 speechSettingsRequired = showSpeechSettings,
+                systemSpeechFallbackAvailable = showSystemFallback,
             )
         }
     }

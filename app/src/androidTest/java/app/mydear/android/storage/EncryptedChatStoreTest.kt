@@ -7,6 +7,7 @@ import app.mydear.android.domain.Role
 import app.mydear.android.domain.SearchSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EncryptedChatStoreTest {
@@ -19,14 +20,26 @@ class EncryptedChatStoreTest {
             listOf(
                 ChatMessage("secure-test", Role.User, fixture),
                 ChatMessage("web-test", Role.Assistant, "검색 답변", Provenance.Web(1234L, listOf(source))),
+                ChatMessage(
+                    "action-test",
+                    Role.Assistant,
+                    "제품을 골라드렸어요",
+                    Provenance.ActionLink(
+                        "북쉘프 스피커 찾아보기",
+                        "https://search.naver.com/search.naver?query=%EB%B6%81%EC%89%98%ED%94%84",
+                    ),
+                ),
             ),
         )
         val rawFiles = context.filesDir.resolve("private-chat").walkTopDown().filter { it.isFile }.toList()
         assertFalse(rawFiles.any { it.readBytes().decodeToString().contains(fixture) })
         val loaded = store.load()
         assertEquals(fixture, loaded.first().text)
-        val web = loaded.last().provenance as Provenance.Web
+        val web = loaded[1].provenance as Provenance.Web
         assertEquals(1234L, web.searchedAtEpochMs)
         assertEquals(listOf(source), web.sources)
+        val action = loaded.last().provenance as Provenance.ActionLink
+        assertEquals("북쉘프 스피커 찾아보기", action.title)
+        assertTrue(action.url.startsWith("https://search.naver.com/search.naver?query="))
     }
 }

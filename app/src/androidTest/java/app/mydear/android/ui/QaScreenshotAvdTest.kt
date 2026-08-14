@@ -1,9 +1,9 @@
 package app.mydear.android.ui
 
-import android.graphics.Bitmap
 import android.content.Context
 import android.view.inputmethod.InputMethodManager
 import android.os.SystemClock
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -79,12 +79,25 @@ class QaScreenshotAvdTest {
         saveScreenshot("preview6-readable-search-source.png")
     }
 
+    @Test fun capturePreview7ProductShortcut() {
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("가성비 좋은 북쉘프 스피커 제품명이랑 링크 줘")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(10_000) {
+            !viewModel.state.value.isGenerating &&
+                viewModel.state.value.messages.lastOrNull()?.provenance is app.mydear.android.domain.Provenance.ActionLink
+        }
+        rule.onNodeWithText("바로가기").assertIsDisplayed()
+        hideKeyboard()
+        saveScreenshot("preview7-product-shortcut.png")
+    }
+
     private fun saveScreenshot(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         SystemClock.sleep(600)
-        val target = checkNotNull(instrumentation.targetContext.externalCacheDir).resolve(name)
-        target.outputStream().use { output ->
-            checkNotNull(instrumentation.uiAutomation.takeScreenshot()).compress(Bitmap.CompressFormat.PNG, 100, output)
+        ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand("screencap -p /sdcard/Download/$name"),
+        ).use { commandOutput ->
+            commandOutput.readBytes()
         }
     }
 

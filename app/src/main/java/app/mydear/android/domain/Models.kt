@@ -19,6 +19,7 @@ enum class Role { User, Assistant }
 sealed interface Provenance {
     data object Local : Provenance
     data class Web(val searchedAtEpochMs: Long, val sources: List<SearchSource>) : Provenance
+    data class ActionLink(val title: String, val url: String) : Provenance
 }
 
 data class SearchSource(val title: String, val host: String, val url: String, val updatedAt: String?)
@@ -29,6 +30,7 @@ data class ConversationRequest(
     val memories: List<String> = emptyList(),
     val screenText: String? = null,
     val screenImage: ByteArray? = null,
+    val actionLinkAvailable: Boolean = false,
 )
 data class SearchRequest(val query: String, val locale: String = "ko-KR")
 data class SearchEvidence(val documents: List<SearchDocument>)

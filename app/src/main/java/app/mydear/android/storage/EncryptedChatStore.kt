@@ -36,7 +36,7 @@ class EncryptedChatStore(context: Context) {
         cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
         val records = json.decodeFromString<List<StoredMessage>>(cipher.doFinal(ciphertext).decodeToString())
         records.takeLast(MAX_MESSAGES).map { record ->
-            val provenance = record.web?.toProvenance() ?: Provenance.Local
+            val provenance = record.web?.toProvenance() ?: record.action?.toProvenance() ?: Provenance.Local
             ChatMessage(
                 record.id.take(80),
                 if (record.role == "user") Role.User else Role.Assistant,
@@ -60,11 +60,20 @@ class EncryptedChatStore(context: Context) {
                         updatedAt = source.updatedAt?.take(MAX_SOURCE_DATE_CHARS),
                     )
                 }
+            val action = (message.provenance as? Provenance.ActionLink)
+                ?.takeIf { it.url.startsWith("https://") }
+                ?.let { link ->
+                    StoredAction(
+                        title = link.title.take(MAX_SOURCE_TITLE_CHARS),
+                        url = link.url.take(MAX_SOURCE_URL_CHARS),
+                    )
+                }
             StoredMessage(
                 message.id.take(80),
                 if (message.role == Role.User) "user" else "assistant",
                 message.text.take(MAX_MESSAGE_CHARS),
                 web,
+                action,
             )
         }
         val plaintext = json.encodeToString(records).encodeToByteArray()
@@ -105,11 +114,22 @@ class EncryptedChatStore(context: Context) {
         )
     }
 
+    private fun StoredAction.toProvenance(): Provenance {
+        val parsed = runCatching { URI(url) }.getOrNull()
+        val valid = parsed?.scheme == "https" && parsed.host == ACTION_LINK_HOST && parsed.path == "/search.naver"
+        return if (valid) {
+            Provenance.ActionLink(title.take(MAX_SOURCE_TITLE_CHARS), url.take(MAX_SOURCE_URL_CHARS))
+        } else {
+            Provenance.Local
+        }
+    }
+
     @Serializable private data class StoredMessage(
         val id: String,
         val role: String,
         val text: String,
         val web: StoredWeb? = null,
+        val action: StoredAction? = null,
     )
 
     @Serializable private data class StoredWeb(
@@ -117,6 +137,11 @@ class EncryptedChatStore(context: Context) {
         val title: String,
         val url: String,
         val updatedAt: String? = null,
+    )
+
+    @Serializable private data class StoredAction(
+        val title: String,
+        val url: String,
     )
 
     companion object {
@@ -131,5 +156,6 @@ class EncryptedChatStore(context: Context) {
         private const val MAX_SOURCE_DATE_CHARS = 80
         private const val MAX_PLAINTEXT_BYTES = 2 * 1024 * 1024
         private const val MAX_ENCRYPTED_BYTES = MAX_PLAINTEXT_BYTES + 64
+        private const val ACTION_LINK_HOST = "search.naver.com"
     }
 }

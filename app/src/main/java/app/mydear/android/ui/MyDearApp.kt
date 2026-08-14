@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Phone
@@ -62,6 +64,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
@@ -84,8 +87,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -127,6 +132,7 @@ import app.mydear.android.tools.ToolName
 import app.mydear.android.runtime.screen.ScreenShareService
 import app.mydear.android.runtime.screen.ScreenShareSession
 import app.mydear.android.runtime.screen.ScreenShareState
+import kotlinx.coroutines.launch
 
 private enum class MainTab(val label: String, val icon: ImageVector) {
     Chat("채팅", Icons.Default.ChatBubble),
@@ -234,6 +240,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         PictureInPictureAssistant(
             voiceState = chatState.voiceState,
             onVoiceClick = onVoiceClick,
+            onVoiceCancel = chatViewModel::stopVoiceMode,
         )
         return
     }
@@ -292,6 +299,8 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 onSend = chatViewModel::sendDraft,
                 onQuickPrompt = chatViewModel::sendQuickPrompt,
                 onVoiceClick = onVoiceClick,
+                onVoiceCancel = chatViewModel::stopVoiceMode,
+                onUseSystemSpeech = chatViewModel::beginSystemVoiceCapture,
                 screenShareState = screenShareState,
                 onScreenShareClick = {
                     when (screenShareState) {
@@ -387,19 +396,25 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     }
 }
 
-@Composable private fun ChatScreen(
+@Composable internal fun ChatScreen(
     padding: PaddingValues,
     state: ChatUiState,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onQuickPrompt: (String) -> Unit,
     onVoiceClick: () -> Unit,
+    onVoiceCancel: () -> Unit,
+    onUseSystemSpeech: () -> Unit,
     screenShareState: ScreenShareState,
     onScreenShareClick: () -> Unit,
     onUseOverAnotherApp: () -> Unit,
     onOpenSpeechSettings: () -> Unit,
 ) {
     val listState = rememberLazyListState()
+    val isListDragged by listState.interactionSource.collectIsDraggedAsState()
+    val scope = rememberCoroutineScope()
+    var followLatest by remember { mutableStateOf(true) }
+    var showSystemSpeechDisclosure by rememberSaveable { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val submitMessage = {
@@ -407,15 +422,30 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         onSend()
     }
     val latestMessageLength = state.messages.lastOrNull()?.text?.length ?: 0
-    LaunchedEffect(state.messages.size, latestMessageLength) {
+    LaunchedEffect(state.messages.size) {
         if (state.messages.isNotEmpty()) {
+            followLatest = true
             listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+        }
+    }
+    LaunchedEffect(latestMessageLength, followLatest) {
+        if (followLatest && state.messages.isNotEmpty()) {
+            listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+        }
+    }
+    LaunchedEffect(isListDragged) {
+        if (isListDragged) {
+            snapshotFlow { listState.canScrollForward }.collect { canScrollForward ->
+                if (canScrollForward) followLatest = false
+            }
+        } else if (!listState.canScrollForward) {
+            followLatest = true
         }
     }
     Column(Modifier.fillMaxSize().padding(padding)) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.weight(1f).fillMaxWidth().testTag("chat-list"),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -442,7 +472,32 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                         color = if (message.role == Role.User) Color(0xFFFFEDE6) else Color.White,
                         shape = RoundedCornerShape(18.dp),
                         modifier = if (message.role == Role.User) Modifier.align(Alignment.End) else Modifier.align(Alignment.Start),
-                    ) { Text(message.text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp), style = MaterialTheme.typography.bodyLarge) }
+                    ) {
+                        if (
+                            message.role == Role.Assistant &&
+                            message.text.isBlank() &&
+                            state.isGenerating &&
+                            message.id == state.messages.lastOrNull()?.id
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp).testTag("answer-loading"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Text(
+                                    if (state.messages.size <= 2) "첫 답변을 준비하고 있어요" else "답변을 준비하고 있어요",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                            }
+                        } else {
+                            Text(
+                                message.text,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        }
+                    }
                     val web = message.provenance as? Provenance.Web
                     if (web != null) {
                         Text("출처", color = Coral, fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -480,9 +535,46 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                             }
                         }
                     }
+                    val actionLink = message.provenance as? Provenance.ActionLink
+                    if (actionLink != null) {
+                        Text("바로가기", color = Coral, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        TextButton(
+                            onClick = {
+                                if (actionLink.url.startsWith("https://search.naver.com/")) {
+                                    runCatching { uriHandler.openUri(actionLink.url) }
+                                }
+                            },
+                            enabled = actionLink.url.startsWith("https://search.naver.com/"),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .semantics { contentDescription = "바로가기 링크: ${actionLink.title}" },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    actionLink.title,
+                                    modifier = Modifier.weight(1f),
+                                    color = Coral,
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    textDecoration = TextDecoration.Underline,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.OpenInNew,
+                                    contentDescription = null,
+                                    tint = Coral,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
-            state.notice?.let { notice ->
+            state.notice?.takeIf {
+                !state.isGenerating && state.voiceState !is VoiceState.Listening && state.voiceState !is VoiceState.PreparingAnswer
+            }?.let { notice ->
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(notice, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
@@ -491,8 +583,38 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                                 Text("한국어 음성 설정 열기")
                             }
                         }
+                        if (state.systemSpeechFallbackAvailable) {
+                            Button(
+                                onClick = { showSystemSpeechDisclosure = true },
+                                modifier = Modifier.heightIn(min = 48.dp).testTag("system-speech-fallback"),
+                            ) {
+                                Text("기본 음성 입력으로 계속")
+                            }
+                        }
                     }
                 }
+            }
+            item(key = "conversation-bottom-anchor") {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(16.dp)
+                        .testTag("chat-bottom-anchor")
+                        .semantics { contentDescription = "대화 끝" },
+                )
+            }
+        }
+        if (!followLatest && state.messages.isNotEmpty()) {
+            OutlinedButton(
+                onClick = {
+                    followLatest = true
+                    scope.launch {
+                        listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                    }
+                },
+                modifier = Modifier.align(Alignment.CenterHorizontally).heightIn(min = 44.dp).testTag("jump-to-latest"),
+            ) {
+                Text("새 답변 보기 ↓")
             }
         }
         Column(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -540,13 +662,20 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 ScreenShareState.Inactive -> Unit
             }
             if (state.voiceState !is VoiceState.Idle) {
-                Text(
-                    VoiceReducer.accessibleLabel(state.voiceState),
-                    color = Coral,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        state.notice?.takeIf(String::isNotBlank) ?: VoiceReducer.accessibleLabel(state.voiceState),
+                        color = Coral,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp),
+                    )
+                    TextButton(onClick = onVoiceCancel, modifier = Modifier.heightIn(min = 44.dp).testTag("voice-stop")) {
+                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (state.voiceState is VoiceState.Failed) "닫기" else "끝내기")
+                    }
+                }
             }
             if (screenShareState !is ScreenShareState.Active && screenShareState !is ScreenShareState.Starting) {
                 AssistChip(
@@ -561,7 +690,11 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     onClick = onVoiceClick,
                     modifier = Modifier.size(50.dp).background(if (state.voiceState is VoiceState.Idle) Color(0xFFF4EFEC) else MaterialTheme.colorScheme.primaryContainer, CircleShape).testTag("voice-control"),
                 ) {
-                    Icon(Icons.Default.Mic, contentDescription = VoiceReducer.accessibleLabel(state.voiceState), tint = if (state.voiceState is VoiceState.Idle) WarmInk else Coral)
+                    Icon(
+                        if (state.voiceState is VoiceState.Listening) Icons.Default.Stop else Icons.Default.Mic,
+                        contentDescription = VoiceReducer.accessibleLabel(state.voiceState),
+                        tint = if (state.voiceState is VoiceState.Idle) WarmInk else Coral,
+                    )
                 }
                 OutlinedTextField(
                     value = state.draft,
@@ -582,11 +715,30 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
             }
         }
     }
+    if (showSystemSpeechDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showSystemSpeechDisclosure = false },
+            title = { Text("기본 음성 입력을 사용할까요?") },
+            text = {
+                Text("오프라인 한국어 모델이 없는 휴대폰에서는 기기의 음성 서비스가 인터넷을 사용할 수 있어요. 녹음은 내새끼의 검색 서버로 보내지 않아요.")
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showSystemSpeechDisclosure = false }) { Text("취소") }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showSystemSpeechDisclosure = false
+                    onUseSystemSpeech()
+                }) { Text("사용하기") }
+            },
+        )
+    }
 }
 
 @Composable private fun PictureInPictureAssistant(
     voiceState: VoiceState,
     onVoiceClick: () -> Unit,
+    onVoiceCancel: () -> Unit,
 ) {
     Surface(color = WarmIvory, modifier = Modifier.fillMaxSize().testTag("picture-in-picture-assistant")) {
         Column(
@@ -597,13 +749,13 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
             Text("내새끼", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
             Spacer(Modifier.height(6.dp))
             IconButton(
-                onClick = onVoiceClick,
+                onClick = if (voiceState is VoiceState.Listening || voiceState is VoiceState.Failed) onVoiceCancel else onVoiceClick,
                 modifier = Modifier
                     .size(64.dp)
                     .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
             ) {
                 Icon(
-                    Icons.Default.Mic,
+                    if (voiceState is VoiceState.Listening) Icons.Default.Stop else Icons.Default.Mic,
                     contentDescription = VoiceReducer.accessibleLabel(voiceState),
                     tint = Coral,
                     modifier = Modifier.size(32.dp),
@@ -770,7 +922,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (showPrivacy) AlertDialog(
         onDismissRequest = { showPrivacy = false },
         title = { Text("개인정보와 검색") },
-        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 인터넷 도움을 켜면 날씨·최신 정보나 공개된 인물·단체 정보가 필요한 현재 질문만 인터넷으로 전송해요. 음성 녹음과 이전 대화는 보내지 않아요.") },
+        text = { Text("일반 대화와 오프라인 음성은 휴대폰 안에서 처리해요. 오프라인 한국어 모델이 없는 기기에서 사용자가 ‘기본 음성 입력’을 직접 선택하면 기기의 음성 서비스가 인터넷을 사용할 수 있어요. 내새끼의 검색 서버에는 녹음을 보내지 않아요. 인터넷 도움은 필요한 현재 질문만 전송하고 이전 대화는 보내지 않아요.") },
         confirmButton = { Button(onClick = { showPrivacy = false }) { Text("확인") } },
     )
     if (showMemories) AlertDialog(

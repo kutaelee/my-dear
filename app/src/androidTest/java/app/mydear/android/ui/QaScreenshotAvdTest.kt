@@ -5,6 +5,7 @@ import android.content.Context
 import android.view.inputmethod.InputMethodManager
 import android.os.SystemClock
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -22,6 +23,7 @@ import org.junit.Test
 
 class QaScreenshotAvdTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
+    private lateinit var viewModel: VoiceChatViewModel
 
     @Before fun prepareState() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -34,7 +36,8 @@ class QaScreenshotAvdTest {
         context.filesDir.resolve("private-chat").deleteRecursively()
         context.filesDir.resolve("private-memory").deleteRecursively()
         rule.activityRule.scenario.onActivity { activity ->
-            ViewModelProvider(activity)[VoiceChatViewModel::class.java].setWebSearch(true)
+            viewModel = ViewModelProvider(activity)[VoiceChatViewModel::class.java]
+            viewModel.setWebSearch(true)
         }
         rule.activityRule.scenario.recreate()
         rule.waitForIdle()
@@ -44,8 +47,8 @@ class QaScreenshotAvdTest {
         rule.onNodeWithText("메시지를 입력하세요").performTextInput("우리나라 대통령 이름")
         rule.onNodeWithContentDescription("메시지 보내기").performClick()
         rule.waitUntil(20_000) {
-            rule.onAllNodesWithText("현재 대한민국 대통령은 이재명입니다.", substring = true)
-                .fetchSemanticsNodes().isNotEmpty()
+            !viewModel.state.value.isGenerating &&
+                viewModel.state.value.messages.lastOrNull()?.text?.contains("현재 대한민국 대통령은 이재명입니다.") == true
         }
         hideKeyboard()
         saveScreenshot("preview4-president-with-source.png")
@@ -62,6 +65,18 @@ class QaScreenshotAvdTest {
         rule.onNodeWithText("내 정보 기억").performClick()
         rule.waitForIdle()
         saveScreenshot("preview4-personal-memory.png")
+    }
+
+    @Test fun capturePublicRoleAnswerWithReadableSource() {
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("리센느 리더는?")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(20_000) {
+            !viewModel.state.value.isGenerating &&
+                viewModel.state.value.messages.lastOrNull()?.text?.contains("리센느의 리더는 원이입니다.") == true
+        }
+        rule.onNodeWithText("리센느의 리더는 원이입니다.", substring = true).assertIsDisplayed()
+        hideKeyboard()
+        saveScreenshot("preview6-readable-search-source.png")
     }
 
     private fun saveScreenshot(name: String) {

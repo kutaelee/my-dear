@@ -10,6 +10,7 @@ import app.mydear.android.domain.Role
 import app.mydear.android.domain.Provenance
 import app.mydear.android.domain.SearchEvidence
 import app.mydear.android.domain.SearchRequest
+import app.mydear.android.domain.InstalledModel
 import app.mydear.android.domain.SttAvailability
 import app.mydear.android.domain.SttEvent
 import app.mydear.android.domain.SttModelRequest
@@ -300,27 +301,35 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     fun selectModelTier(tier: GemmaTier) {
         if (tier == state.value.selectedModelTier) return
         cancelActiveAnswer()
+        modelDownloadJob?.cancel()
         modelPreferences.select(tier)
         viewModelScope.launch { conversation.release() }
         preparedModelId = null
+        val installed = modelResolver.resolveGemma(tier) != null
         mutableState.update {
             it.copy(
                 selectedModelTier = tier,
-                modelInstalled = modelResolver.resolveGemma(tier) != null,
-                notice = if (modelResolver.resolveGemma(tier) == null) "${tier.label} 모델을 먼저 설치해 주세요." else null,
+                modelInstalled = installed,
+                isDownloadingModel = false,
+                modelDownloadProgress = if (installed) 100 else 0,
+                notice = if (!installed) "${tier.label} 모델을 먼저 설치해 주세요." else null,
             )
         }
+        restoreModelDownload(tier)
     }
 
-    fun refreshInstalledModels() = mutableState.update {
-        it.copy(
-            modelInstalled = modelResolver.resolveGemma(it.selectedModelTier) != null,
-            ttsInstalled = modelResolver.resolveSupertonic() != null,
-        )
+    fun refreshInstalledModels() {
+        val model = modelResolver.resolveGemma(state.value.selectedModelTier)
+        val voice = modelResolver.resolveSupertonic()
+        mutableState.update { it.copy(modelInstalled = model != null, ttsInstalled = voice != null) }
     }
 
     fun installSelectedModel() {
-        if (state.value.isDownloadingModel || state.value.modelInstalled) return
+        if (state.value.isDownloadingModel) return
+        if (resolveSelectedModelAndRefreshState() != null) {
+            mutableState.update { it.copy(notice = "${it.selectedModelTier.label}은 이미 준비되어 있어요.") }
+            return
+        }
         val tier = state.value.selectedModelTier
         val request = ModelDownloadWorker.enqueue(getApplication(), tier)
         mutableState.update { it.copy(isDownloadingModel = true, modelDownloadProgress = 0, notice = "${tier.label} 다운로드를 시작했어요") }
@@ -332,31 +341,42 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         modelDownloadJob = viewModelScope.launch {
             val workManager = WorkManager.getInstance(getApplication())
             while (true) {
+                if (state.value.selectedModelTier != tier) break
                 val info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(workId).get() }
                 if (info == null) {
-                    mutableState.update { it.copy(isDownloadingModel = false, notice = "다운로드 상태를 확인하지 못했어요. 다시 눌러 주세요.") }
+                    mutableState.update {
+                        if (it.selectedModelTier == tier) {
+                            it.copy(isDownloadingModel = false, notice = "다운로드 상태를 확인하지 못했어요. 다시 눌러 주세요.")
+                        } else it
+                    }
                     break
                 }
                 val progress = info.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0)
-                mutableState.update { it.copy(modelDownloadProgress = progress) }
+                mutableState.update { if (it.selectedModelTier == tier) it.copy(modelDownloadProgress = progress) else it }
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> {
+                        val installed = waitForInstalledModel(tier)
+                        preparedModelId = null
                         mutableState.update {
-                            it.copy(
+                            if (it.selectedModelTier == tier) it.copy(
                                 isDownloadingModel = false,
                                 modelDownloadProgress = 100,
-                                modelInstalled = modelResolver.resolveGemma(tier) != null,
-                                notice = "${tier.label} 설치가 끝났어요",
-                            )
+                                modelInstalled = installed != null,
+                                notice = if (installed != null) {
+                                    "${tier.label} 준비가 끝났어요. 바로 대화할 수 있어요."
+                                } else {
+                                    "다운로드는 끝났지만 AI 준비 상태를 확인하지 못했어요. 다시 눌러 주세요."
+                                },
+                            ) else it
                         }
                         break
                     }
                     WorkInfo.State.FAILED, WorkInfo.State.CANCELLED -> {
                         mutableState.update {
-                            it.copy(
+                            if (it.selectedModelTier == tier) it.copy(
                                 isDownloadingModel = false,
                                 notice = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "모델 설치를 마치지 못했어요",
-                            )
+                            ) else it
                         }
                         break
                     }
@@ -414,22 +434,9 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun restoreActiveDownloads() {
+        restoreModelDownload(state.value.selectedModelTier)
         val workManager = WorkManager.getInstance(getApplication())
-        val tier = state.value.selectedModelTier
         viewModelScope.launch {
-            val activeModel = withContext(Dispatchers.IO) {
-                workManager.getWorkInfosForUniqueWork(ModelDownloadWorker.workName(tier)).get()
-                    .lastOrNull { it.state in ACTIVE_WORK_STATES }
-            }
-            if (activeModel != null) {
-                mutableState.update {
-                    it.copy(
-                        isDownloadingModel = true,
-                        modelDownloadProgress = activeModel.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0),
-                    )
-                }
-                observeModelDownload(activeModel.id, tier)
-            }
             val activeTts = withContext(Dispatchers.IO) {
                 workManager.getWorkInfosForUniqueWork(SupertonicDownloadWorker.WORK_NAME).get()
                     .lastOrNull { it.state in ACTIVE_WORK_STATES }
@@ -442,6 +449,35 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
                 observeTtsDownload(activeTts.id)
+            }
+        }
+    }
+
+    private fun restoreModelDownload(tier: GemmaTier) {
+        viewModelScope.launch {
+            val workManager = WorkManager.getInstance(getApplication())
+            val workInfos = withContext(Dispatchers.IO) {
+                workManager.getWorkInfosForUniqueWork(ModelDownloadWorker.workName(tier)).get()
+            }
+            if (state.value.selectedModelTier != tier) return@launch
+            val activeModel = workInfos.firstOrNull { it.state in ACTIVE_WORK_STATES }
+            if (activeModel != null) {
+                mutableState.update {
+                    if (it.selectedModelTier == tier) it.copy(
+                        isDownloadingModel = true,
+                        modelDownloadProgress = activeModel.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0),
+                    ) else it
+                }
+                observeModelDownload(activeModel.id, tier)
+                return@launch
+            }
+            val installed = waitForInstalledModel(tier)
+            mutableState.update {
+                if (it.selectedModelTier == tier) it.copy(
+                    isDownloadingModel = false,
+                    modelDownloadProgress = if (installed != null) 100 else 0,
+                    modelInstalled = installed != null,
+                ) else it
             }
         }
     }
@@ -502,7 +538,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     if (speak) speakAnswer(turnId, publicAnswer) else finishAnswer(turnId)
                     return@launch
                 }
-                val model = modelResolver.resolveGemma(state.value.selectedModelTier)
+                val model = resolveSelectedModelAndRefreshState()
                 if (model == null) {
                     val message = "오프라인 AI가 아직 준비되지 않았어요. 하단 ‘설정’의 ‘오프라인 AI 준비’에서 기본 AI를 내려받아 주세요."
                     replaceAssistantText(assistantId, message)
@@ -596,19 +632,35 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private suspend fun loadSearchEvidenceIfRequested(query: String): SearchEvidence? {
-        val requiresFreshness = InternetQueryPolicy.requiresFreshness(query)
+        val needsInternet = InternetQueryPolicy.needsExternalKnowledge(query)
         if (!state.value.useWebSearch) {
-            if (requiresFreshness) throw InternetSearchException("바뀔 수 있는 정보라 인터넷 확인이 필요해요. 위의 ‘인터넷 도움’을 켜고 다시 물어봐 주세요.")
+            if (needsInternet) throw InternetSearchException("인터넷 확인이 필요한 질문이에요. 설정에서 ‘인터넷 도움’을 켜고 다시 물어봐 주세요.")
             return null
         }
         if (InternetQueryPolicy.isUnsupportedByPublicFallback(query) && configuredSearchGateway == null) {
-            throw InternetSearchException("이 최신 정보는 아직 무료 인터넷 도움에서 정확히 확인할 수 없어요. 추측해서 답하지 않을게요.")
+            throw InternetSearchException("이 정보는 아직 무료 인터넷 도움에서 정확히 확인할 수 없어요. 추측해서 답하지 않을게요.")
         }
         if (!InternetQueryPolicy.shouldUseInternet(query, configuredSearchGateway != null)) return null
         mutableState.update { it.copy(notice = "인터넷에서 최신 자료를 찾고 있어요") }
         return searchGateway.search(SearchRequest(query)).getOrElse {
             throw if (it is InternetSearchException) it else InternetSearchException("인터넷 정보를 가져오지 못했어요. 연결을 확인하고 다시 시도해 주세요.")
         }
+    }
+
+    private fun resolveSelectedModelAndRefreshState(): InstalledModel? {
+        val model = modelResolver.resolveGemma(state.value.selectedModelTier)
+        if (state.value.modelInstalled != (model != null)) {
+            mutableState.update { it.copy(modelInstalled = model != null) }
+        }
+        return model
+    }
+
+    private suspend fun waitForInstalledModel(tier: GemmaTier): InstalledModel? {
+        repeat(10) {
+            modelResolver.resolveGemma(tier)?.let { return it }
+            delay(100)
+        }
+        return null
     }
 
     private fun cleanAssistantAnswer(value: String): String = value

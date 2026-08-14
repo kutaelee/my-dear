@@ -15,6 +15,7 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayOutputStream
+import java.time.LocalDateTime
 
 class PublicInternetSearchGateway(
     private val client: OkHttpClient = HttpsSearchProxyGateway.secureClient(),
@@ -26,7 +27,7 @@ class PublicInternetSearchGateway(
             val query = SearchBoundary.normalizedQuery(request.query)
             require(query.isNotBlank()) { "검색할 내용을 입력해 주세요." }
             if (!InternetQueryPolicy.isPublicFallbackSupported(query)) {
-                throw InternetSearchException("이 최신 정보는 아직 무료 인터넷 도움에서 정확히 확인할 수 없어요.")
+                throw InternetSearchException("이 정보는 아직 무료 인터넷 도움에서 정확히 확인할 수 없어요.")
             }
             if (InternetQueryPolicy.isWeather(query)) searchWeather(query) else searchWikipedia(query)
         }
@@ -64,7 +65,7 @@ class PublicInternetSearchGateway(
         val placeName = listOfNotNull(place.admin1, place.admin2, place.admin3, place.name).distinct().joinToString(" ")
         val today = forecast.daily
         val snippet = buildString {
-            append("${current.time} 기준 $placeName 날씨는 ${weatherDescription(current.weatherCode)}입니다. ")
+            append("${friendlyKoreanTime(current.time)} 기준 $placeName 날씨는 ${weatherDescription(current.weatherCode)}입니다. ")
             append("현재 ${current.temperature}°C, 체감 ${current.apparentTemperature}°C, ")
             append("강수 ${current.precipitation}mm, 바람 ${current.windSpeed}km/h입니다.")
             if (today != null && today.time.isNotEmpty()) {
@@ -75,9 +76,9 @@ class PublicInternetSearchGateway(
         return SearchEvidence(
             listOf(
                 SearchDocument(
-                    title = "$placeName 현재 날씨와 오늘 예보",
+                    title = "Open-Meteo 날씨 정보 · $placeName",
                     host = "open-meteo.com",
-                    url = forecastUrl.toString(),
+                    url = "https://open-meteo.com/",
                     snippet = snippet.take(2_000),
                     publishedAt = current.time,
                 ),
@@ -102,11 +103,16 @@ class PublicInternetSearchGateway(
             .addQueryParameter("utf8", "1")
             .build()
         val response = getJson<WikiResponse>(url)
-        val documents = response.query?.pages.orEmpty()
+        val pages = response.query?.pages.orEmpty()
             .sortedBy { it.index }
             .filter { it.title.isNotBlank() && it.extract.isNotBlank() }
             .take(3)
-            .map { page ->
+        val detailedKind = InternetQueryPolicy.detailedKnowledgeKind(query)
+        val detailedFact = pages.firstOrNull()
+            ?.takeIf { detailedKind != null }
+            ?.let { page -> fetchWikiText(page.pageId) }
+            ?.let { wikitext -> extractDetailedFact(checkNotNull(detailedKind), wikitext) }
+        val documents = pages.mapIndexed { index, page ->
                 val pageUrl = HttpUrl.Builder()
                     .scheme("https")
                     .host("ko.wikipedia.org")
@@ -117,12 +123,43 @@ class PublicInternetSearchGateway(
                     title = page.title.take(240),
                     host = "ko.wikipedia.org",
                     url = pageUrl.toString(),
-                    snippet = sanitize(page.extract),
+                    snippet = buildString {
+                        if (index == 0 && detailedFact != null) {
+                            append("확인된 공개 정보: ${detailedFact.label}는 ${detailedFact.value}입니다. ")
+                        }
+                        append(sanitize(page.extract))
+                    }.take(2_000),
                     publishedAt = null,
                 )
             }
         if (documents.isEmpty()) throw InternetSearchException("인터넷에서 확인할 자료를 찾지 못했어요. 질문을 조금 다르게 써 주세요.")
         return SearchEvidence(documents)
+    }
+
+    private fun fetchWikiText(pageId: Int): String {
+        if (pageId <= 0) return ""
+        val url = HttpUrl.Builder()
+            .scheme("https")
+            .host("ko.wikipedia.org")
+            .addPathSegments("w/api.php")
+            .addQueryParameter("action", "parse")
+            .addQueryParameter("pageid", pageId.toString())
+            .addQueryParameter("prop", "wikitext")
+            .addQueryParameter("format", "json")
+            .addQueryParameter("formatversion", "2")
+            .addQueryParameter("utf8", "1")
+            .build()
+        return getJson<WikiParseResponse>(url).parse?.wikitext.orEmpty()
+    }
+
+    private fun extractDetailedFact(
+        kind: InternetQueryPolicy.DetailedKnowledgeKind,
+        wikitext: String,
+    ): DetailedFact? = when (kind) {
+        InternetQueryPolicy.DetailedKnowledgeKind.Leader ->
+            WikiFactExtractor.leader(wikitext)?.let { DetailedFact("리더", it) }
+        InternetQueryPolicy.DetailedKnowledgeKind.Winner ->
+            WikiFactExtractor.winner(wikitext)?.let { DetailedFact("우승자", it) }
     }
 
     private fun searchKoreanPlace(location: String): GeocodePlace? {
@@ -200,10 +237,22 @@ class PublicInternetSearchGateway(
         else -> "변화가 있는 날씨"
     }
 
+    private fun friendlyKoreanTime(value: String): String = runCatching {
+        val time = LocalDateTime.parse(value)
+        val period = if (time.hour < 12) "오전" else "오후"
+        val hour = when (val hour12 = time.hour % 12) { 0 -> 12 else -> hour12 }
+        buildString {
+            append("${time.monthValue}월 ${time.dayOfMonth}일 $period ${hour}시")
+            if (time.minute != 0) append(" ${time.minute}분")
+        }
+    }.getOrDefault("현재")
+
     companion object { private const val MAX_RESPONSE_BYTES = 96 * 1024 }
 }
 
 class InternetSearchException(message: String) : IllegalStateException(message)
+
+private data class DetailedFact(val label: String, val value: String)
 
 @Serializable private data class GeocodeResponse(val results: List<GeocodePlace> = emptyList())
 @Serializable private data class GeocodePlace(
@@ -233,11 +282,14 @@ class InternetSearchException(message: String) : IllegalStateException(message)
 @Serializable private data class WikiResponse(val query: WikiQuery? = null)
 @Serializable private data class WikiQuery(val pages: List<WikiPage> = emptyList())
 @Serializable private data class WikiPage(
+    @SerialName("pageid") val pageId: Int = 0,
     val title: String = "",
     val extract: String = "",
     val index: Int = Int.MAX_VALUE,
     val coordinates: List<WikiCoordinate> = emptyList(),
 )
+@Serializable private data class WikiParseResponse(val parse: WikiParse? = null)
+@Serializable private data class WikiParse(val wikitext: String = "")
 @Serializable private data class WikiCoordinate(
     @SerialName("lat") val latitude: Double,
     @SerialName("lon") val longitude: Double,

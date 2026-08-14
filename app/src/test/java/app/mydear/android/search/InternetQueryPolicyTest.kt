@@ -9,11 +9,37 @@ class InternetQueryPolicyTest {
     @Test fun routesOnlyQuestionsThatBenefitFromCurrentInformation() {
         assertTrue(InternetQueryPolicy.shouldUseInternet("오늘 와부읍 날씨 알려줘", broadSearchAvailable = false))
         assertTrue(InternetQueryPolicy.shouldUseInternet("대통령이 누구야", broadSearchAvailable = false))
+        assertTrue(InternetQueryPolicy.shouldUseInternet("리센느 리더는?", broadSearchAvailable = false))
+        assertTrue(InternetQueryPolicy.shouldUseInternet("미스트롯의 우승자는?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("누구라고", broadSearchAvailable = false))
         assertFalse(InternetQueryPolicy.shouldUseInternet("오늘 환율", broadSearchAvailable = false))
         assertTrue(InternetQueryPolicy.shouldUseInternet("오늘 환율", broadSearchAvailable = true))
         assertFalse(InternetQueryPolicy.shouldUseInternet("담요 개는법", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("담요 개는 법 알려줘", broadSearchAvailable = false))
         assertFalse(InternetQueryPolicy.shouldUseInternet("아무 담요나", broadSearchAvailable = false))
         assertFalse(InternetQueryPolicy.shouldUseInternet("오늘 저녁 뭐 먹지", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("오늘 저녁 뭐 먹을지 알려줘", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("엄마는 누구야", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("제 주민번호가 뭐야", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("우리 집 주소가 어디야", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("우리 회사 대표가 누구야?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("우리 동아리 리더는 누구야?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("우리회사 대표가 누구야?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("우리동아리 리더는?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("저희팀 리더는?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("내회사 대표는?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("내가 배우가 될 수 있을까?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("내 남편이 배우야?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("제 딸이 가수야?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("내가 대통령이 될 수 있을까?", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("내가 대통령이 될 수 있을까?", broadSearchAvailable = true))
+        assertFalse(InternetQueryPolicy.needsExternalKnowledge("내가 대통령이 될 수 있을까?"))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("회사 대표가 누구야?", broadSearchAvailable = false))
+        assertTrue(InternetQueryPolicy.shouldUseInternet("삼성전자 대표가 누구야?", broadSearchAvailable = false))
+        assertTrue(InternetQueryPolicy.shouldUseInternet("오늘 와부읍 날씨 정리해줘", broadSearchAvailable = false))
+        assertTrue(InternetQueryPolicy.shouldUseInternet("삼성전자 대표를 검색해서 정리해줘", broadSearchAvailable = false))
+        assertFalse(InternetQueryPolicy.shouldUseInternet("인터넷에서 최신 뉴스를 검색해서 정리해줘", broadSearchAvailable = false))
+        assertTrue(InternetQueryPolicy.shouldUseInternet("인터넷에서 최신 뉴스를 검색해서 정리해줘", broadSearchAvailable = true))
     }
 
     @Test fun extractsKoreanWeatherLocationFromNaturalQuestion() {
@@ -44,5 +70,12 @@ class InternetQueryPolicyTest {
         assertFalse(InternetQueryPolicy.shouldUseInternet("엄마 전화번호 찾아줘", broadSearchAvailable = true))
         assertFalse(InternetQueryPolicy.requiresFreshness("내일 병원 일정 알려줘"))
         assertTrue(InternetQueryPolicy.shouldUseInternet("인터넷에서 남양주 행사 검색해줘", broadSearchAvailable = true))
+        assertTrue(InternetQueryPolicy.isUnsupportedByPublicFallback("인터넷에서 남양주 행사 검색해줘"))
+        assertTrue(InternetQueryPolicy.isEllipticalFollowUp("누구라고"))
+        assertFalse(InternetQueryPolicy.isEllipticalFollowUp("리센느 리더는?"))
+        assertEquals(
+            InternetQueryPolicy.DetailedKnowledgeKind.Winner,
+            InternetQueryPolicy.detailedKnowledgeKind("미스트롯의 우승자는?"),
+        )
     }
 }

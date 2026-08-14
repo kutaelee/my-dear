@@ -340,7 +340,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (showSearchDisclosure) AlertDialog(
         onDismissRequest = { showSearchDisclosure = false },
         title = { Text("인터넷 도움 켜기") },
-        text = { Text("날씨나 최신 정보가 필요한 질문만 인터넷으로 확인해요. 현재 질문만 보내고, 음성 녹음과 이전 대화는 보내지 않아요. 이름, 주소, 전화번호는 질문에 쓰지 마세요.") },
+        text = { Text("날씨·최신 정보나 공개된 인물·단체 정보가 필요한 질문만 인터넷으로 확인해요. 현재 질문만 보내고, 음성 녹음과 이전 대화는 보내지 않아요. 이름, 주소, 전화번호는 질문에 쓰지 마세요.") },
         dismissButton = { OutlinedButton(onClick = { showSearchDisclosure = false }) { Text("취소") } },
         confirmButton = { Button(onClick = { showSearchDisclosure = false; chatViewModel.setWebSearch(true) }) { Text("동의하고 켜기") } },
     )
@@ -462,7 +462,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                             ) {
                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        "${source.title} · ${source.host}",
+                                        source.title,
                                         modifier = Modifier.weight(1f),
                                         color = Coral,
                                         fontSize = 14.sp,
@@ -684,7 +684,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
         item {
             SettingToggleRow(
                 "인터넷 도움",
-                "날씨와 최신 정보가 필요할 때 자동으로 확인",
+                "날씨·최신 정보와 공개된 정보를 자동으로 확인",
                 state.useWebSearch,
                 onWebSearchChanged,
                 testTag = "internet-toggle",
@@ -770,7 +770,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (showPrivacy) AlertDialog(
         onDismissRequest = { showPrivacy = false },
         title = { Text("개인정보와 검색") },
-        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 인터넷 도움을 켜면 날씨나 최신 정보가 필요한 현재 질문만 인터넷으로 전송해요. 음성 녹음과 이전 대화는 보내지 않아요.") },
+        text = { Text("일반 대화와 음성은 휴대폰 안에서 처리해요. 인터넷 도움을 켜면 날씨·최신 정보나 공개된 인물·단체 정보가 필요한 현재 질문만 인터넷으로 전송해요. 음성 녹음과 이전 대화는 보내지 않아요.") },
         confirmButton = { Button(onClick = { showPrivacy = false }) { Text("확인") } },
     )
     if (showMemories) AlertDialog(
@@ -868,7 +868,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     val bodies = listOf(
         "아래 입력창에 메시지를 쓰거나 왼쪽 마이크 버튼을 눌러 말해보세요.",
         "내새끼가 읽는 중에도 마이크를 누르면 답변을 멈추고 새 질문을 들을게요.",
-        "인터넷 도움은 처음부터 켜져 있어요. 날씨나 최신 정보가 필요한 질문만 인터넷으로 확인하고, 현재 질문만 보내요. 설정에서 언제든 끌 수 있어요.",
+        "인터넷 도움은 처음부터 켜져 있어요. 날씨·최신 정보나 공개된 인물·단체 정보가 필요한 질문만 인터넷으로 확인하고, 현재 질문만 보내요. 설정에서 언제든 끌 수 있어요.",
         "‘화면 같이 보기’를 누르고 보여줄 화면을 고르세요. 질문할 때 버튼, 아이콘, 글자와 사진을 함께 살펴보고, 화면은 저장하지 않아요.",
         "설정에서 글자 크기를 언제든 바꿀 수 있어요.",
     )

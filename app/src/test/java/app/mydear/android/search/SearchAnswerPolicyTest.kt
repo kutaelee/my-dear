@@ -32,4 +32,41 @@ class SearchAnswerPolicyTest {
         assertEquals(listOf(1), SearchAnswerPolicy.sourceIndices("답변 [자료2]", 2))
         assertTrue(SearchAnswerPolicy.sourceIndices("답변", 0).isEmpty())
     }
+
+    @Test fun publicRoleAnswerIsDeterministicAndUsesTheMatchingPage() {
+        val roleEvidence = SearchEvidence(
+            listOf(
+                SearchDocument(
+                    "리센느",
+                    "ko.wikipedia.org",
+                    "https://ko.wikipedia.org/wiki/%EB%A6%AC%EC%84%BC%EB%8A%90",
+                    "확인된 구성 정보: 리더는 원이입니다. 리센느는 대한민국의 5인조 걸 그룹입니다.",
+                    null,
+                ),
+            ),
+        )
+
+        assertEquals("리센느의 리더는 원이입니다.", SearchAnswerPolicy.publicAnswer("리센느 리더는?", roleEvidence))
+        assertEquals(listOf(0), SearchAnswerPolicy.publicSourceIndices("리센느 리더는?", roleEvidence))
+    }
+
+    @Test fun publicWinnerAnswerIsDeterministicAndUsesTheMatchingPage() {
+        val winnerEvidence = SearchEvidence(
+            listOf(
+                SearchDocument(
+                    "내일은 미스트롯",
+                    "ko.wikipedia.org",
+                    "https://ko.wikipedia.org/wiki/test",
+                    "확인된 공개 정보: 우승자는 송가인입니다. 대한민국의 트롯 오디션 프로그램입니다.",
+                    null,
+                ),
+            ),
+        )
+
+        assertEquals(
+            "내일은 미스트롯의 우승자는 송가인입니다.",
+            SearchAnswerPolicy.publicAnswer("미스트롯의 우승자는?", winnerEvidence),
+        )
+        assertEquals(listOf(0), SearchAnswerPolicy.publicSourceIndices("미스트롯의 우승자는?", winnerEvidence))
+    }
 }

@@ -165,6 +165,38 @@ class MyDearAppTest {
         assertEquals(0, rule.onAllNodesWithText("[자료", substring = true).fetchSemanticsNodes().size)
     }
 
+    @Test fun publicGroupRoleUsesInternetAndShowsAReadablePageSource() {
+        skipTutorial()
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("리센느 리더는?")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(20_000) {
+            rule.onAllNodesWithText("리센느의 리더는 원이입니다.", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("리센느의 리더는 원이입니다.", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithContentDescription("출처 링크: 리센느").assertIsDisplayed().assertHasClickAction()
+        assertEquals(0, rule.onAllNodesWithText("ko.wikipedia.org", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("w/api.php", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun publicCompetitionWinnerUsesInternetAndAnswersDirectly() {
+        skipTutorial()
+        rule.onNodeWithText("메시지를 입력하세요").performTextInput("미스트롯의 우승자는?")
+        rule.onNodeWithContentDescription("메시지 보내기").performClick()
+        rule.waitUntil(20_000) {
+            rule.onAllNodesWithText("내일은 미스트롯의 우승자는 송가인입니다.", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("내일은 미스트롯의 우승자는 송가인입니다.", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        rule.onNodeWithContentDescription("출처 링크: 내일은 미스트롯")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        assertEquals(0, rule.onAllNodesWithText("ko.wikipedia.org", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("w/api.php", substring = true).fetchSemanticsNodes().size)
+    }
+
     @Test fun explicitPersonalMemoryWorksWithoutModelAndCanBeReviewed() {
         skipTutorial()
         rule.onNodeWithText("메시지를 입력하세요").performTextInput("내 이름은 민수야 기억해줘")

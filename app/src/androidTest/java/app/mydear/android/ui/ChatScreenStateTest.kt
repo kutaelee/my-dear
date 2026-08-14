@@ -2,6 +2,7 @@ package app.mydear.android.ui
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,6 +13,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import app.mydear.android.domain.ChatMessage
 import app.mydear.android.domain.Role
 import app.mydear.android.domain.TurnId
@@ -163,5 +166,133 @@ class ChatScreenStateTest {
         rule.onNodeWithTag("system-speech-fallback").assertIsDisplayed().performClick()
         rule.onNodeWithText("기본 음성 입력을 사용할까요?").assertIsDisplayed()
         rule.onNodeWithText("취소").performClick()
+    }
+
+    @Test fun listeningShowsTheRecognizedWordsOutsideTheInputField() {
+        rule.setContent {
+            MaterialTheme {
+                ChatScreen(
+                    padding = PaddingValues(),
+                    state = ChatUiState(
+                        voiceState = VoiceState.Listening(TurnId("live-transcript")),
+                        voiceTranscript = "오늘 와부읍 날씨 알려줘",
+                        draft = "오늘 와부읍 날씨 알려줘",
+                        notice = "듣고 있어요 · 아래 문장이 맞는지 확인해 주세요",
+                    ),
+                    onDraftChange = {},
+                    onSend = {},
+                    onQuickPrompt = {},
+                    onVoiceClick = {},
+                    onVoiceCancel = {},
+                    onUseSystemSpeech = {},
+                    screenShareState = ScreenShareState.Inactive,
+                    onScreenShareClick = {},
+                    onUseOverAnotherApp = {},
+                    onOpenSpeechSettings = {},
+                )
+            }
+        }
+
+        rule.onNodeWithTag("live-voice-transcript").assertIsDisplayed()
+        rule.onNodeWithText("들은 말").assertIsDisplayed()
+        rule.onNodeWithTag("voice-stop").assertIsDisplayed()
+    }
+
+    @Test fun longLiveTranscriptAtDoubleFontScaleDoesNotPushComposerControlsOffScreen() {
+        rule.setContent {
+            val currentDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(currentDensity.density, fontScale = 2f),
+            ) {
+                MaterialTheme {
+                    ChatScreen(
+                        padding = PaddingValues(),
+                        state = ChatUiState(
+                            voiceState = VoiceState.Listening(TurnId("long-live-transcript")),
+                            voiceTranscript = "긴 문장을 계속 말해도 들은 말 영역은 세 줄만 보여야 합니다. ".repeat(20),
+                            draft = "긴 문장을 계속 말해도 들은 말 영역은 세 줄만 보여야 합니다.",
+                            notice = "듣고 있어요",
+                        ),
+                        onDraftChange = {},
+                        onSend = {},
+                        onQuickPrompt = {},
+                        onVoiceClick = {},
+                        onVoiceCancel = {},
+                        onUseSystemSpeech = {},
+                        screenShareState = ScreenShareState.Inactive,
+                        onScreenShareClick = {},
+                        onUseOverAnotherApp = {},
+                        onOpenSpeechSettings = {},
+                    )
+                }
+            }
+        }
+
+        rule.onNodeWithTag("live-voice-transcript").assertIsDisplayed()
+        rule.onNodeWithTag("screen-share-control").assertIsDisplayed()
+        rule.onNodeWithTag("voice-control").assertIsDisplayed()
+    }
+
+    @Test fun missingTtsOffersAVisibleInstallActionBesideTheComposer() {
+        var installRequested = false
+        rule.setContent {
+            MaterialTheme {
+                ChatScreen(
+                    padding = PaddingValues(),
+                    state = ChatUiState(
+                        messages = listOf(ChatMessage("answer", Role.Assistant, "글로 만든 답변")),
+                        ttsInstalled = false,
+                        ttsSetupRequired = true,
+                        notice = "답변은 글로 표시했어요. 한국어 목소리를 받으면 다음부터 읽어드려요.",
+                    ),
+                    onDraftChange = {},
+                    onSend = {},
+                    onQuickPrompt = {},
+                    onVoiceClick = {},
+                    onVoiceCancel = {},
+                    onUseSystemSpeech = {},
+                    screenShareState = ScreenShareState.Inactive,
+                    onScreenShareClick = {},
+                    onUseOverAnotherApp = {},
+                    onOpenSpeechSettings = {},
+                    onInstallTts = { installRequested = true },
+                )
+            }
+        }
+
+        rule.onNodeWithTag("tts-setup-card").assertIsDisplayed()
+        rule.onNodeWithText("목소리 받기").assertIsDisplayed().performClick()
+        rule.runOnIdle { assertTrue(installRequested) }
+    }
+
+    @Test fun playbackFailureKeepsTheWrittenAnswerAndOffersRetry() {
+        var retryRequested = false
+        rule.setContent {
+            MaterialTheme {
+                ChatScreen(
+                    padding = PaddingValues(),
+                    state = ChatUiState(
+                        messages = listOf(ChatMessage("answer", Role.Assistant, "재생에 실패해도 남아 있는 답변")),
+                        ttsInstalled = true,
+                        ttsPlaybackFailed = true,
+                    ),
+                    onDraftChange = {},
+                    onSend = {},
+                    onQuickPrompt = {},
+                    onVoiceClick = {},
+                    onVoiceCancel = {},
+                    onUseSystemSpeech = {},
+                    screenShareState = ScreenShareState.Inactive,
+                    onScreenShareClick = {},
+                    onUseOverAnotherApp = {},
+                    onOpenSpeechSettings = {},
+                    onRetryTts = { retryRequested = true },
+                )
+            }
+        }
+
+        rule.onNodeWithText("재생에 실패해도 남아 있는 답변").assertIsDisplayed()
+        rule.onNodeWithTag("retry-tts-playback").assertIsDisplayed().performClick()
+        rule.runOnIdle { assertTrue(retryRequested) }
     }
 }

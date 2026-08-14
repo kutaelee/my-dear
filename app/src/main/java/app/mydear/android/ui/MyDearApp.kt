@@ -317,6 +317,8 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     }.isSuccess
                     if (!opened) context.startActivity(Intent(Settings.ACTION_SETTINGS))
                 },
+                onInstallTts = onInstallTts,
+                onRetryTts = chatViewModel::retryLastAnswerSpeech,
             )
             MainTab.History -> HistoryScreen(padding, chatState, onOpenChat = { tabName = MainTab.Chat.name })
             MainTab.Settings -> SettingsScreen(
@@ -409,6 +411,8 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     onScreenShareClick: () -> Unit,
     onUseOverAnotherApp: () -> Unit,
     onOpenSpeechSettings: () -> Unit,
+    onInstallTts: () -> Unit = {},
+    onRetryTts: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val isListDragged by listState.interactionSource.collectIsDraggedAsState()
@@ -664,6 +668,31 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     }
                 }
             }
+            if (state.voiceState is VoiceState.Listening && state.voiceTranscript.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .testTag("live-voice-transcript")
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "들은 말: ${state.voiceTranscript}"
+                        },
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        Text("들은 말", color = Coral, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            state.voiceTranscript,
+                            fontSize = 16.sp,
+                            lineHeight = 22.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clearAndSetSemantics { },
+                        )
+                    }
+                }
+            }
             if (state.systemSpeechFallbackAvailable) {
                 Button(
                     onClick = { showSystemSpeechDisclosure = true },
@@ -681,6 +710,42 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 ) {
                     Text("오프라인 한국어 음성 설정 열기")
+                }
+            }
+            if (state.ttsSetupRequired && !state.ttsInstalled) {
+                Surface(
+                    color = Color(0xFFFFF4EF),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).testTag("tts-setup-card"),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            if (state.isDownloadingTts) "답변 목소리를 받고 있어요 ${state.ttsDownloadProgress}%"
+                            else "답변을 소리로 들으려면 목소리가 필요해요.",
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            onClick = onInstallTts,
+                            enabled = !state.isDownloadingTts,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("install-tts-from-chat"),
+                        ) {
+                            Text(if (state.isDownloadingTts) "받는 중…" else "목소리 받기")
+                        }
+                    }
+                }
+            }
+            if (state.ttsPlaybackFailed && state.ttsInstalled) {
+                OutlinedButton(
+                    onClick = onRetryTts,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("retry-tts-playback"),
+                ) {
+                    Text("답변 다시 읽기")
                 }
             }
             if (screenShareState !is ScreenShareState.Active && screenShareState !is ScreenShareState.Starting) {

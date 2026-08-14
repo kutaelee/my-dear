@@ -77,6 +77,7 @@ import kotlinx.coroutines.runBlocking
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
+    val voiceTranscript: String = "",
     val voiceState: VoiceState = VoiceState.Idle,
     val notice: String? = null,
     val selectedModelTier: GemmaTier = GemmaTier.E2B,
@@ -93,6 +94,8 @@ data class ChatUiState(
     val pendingTool: ToolProposal? = null,
     val speechSettingsRequired: Boolean = false,
     val systemSpeechFallbackAvailable: Boolean = false,
+    val ttsSetupRequired: Boolean = false,
+    val ttsPlaybackFailed: Boolean = false,
 )
 
 class VoiceChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -221,7 +224,13 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     val turnId = TurnId.create()
                     val transition = VoiceReducer.reduce(state.value.voiceState, VoiceEvent.StartListening(turnId))
                     mutableState.update {
-                        it.copy(voiceState = transition.state, notice = "휴대폰 안에서 듣고 있어요", speechSettingsRequired = false)
+                        it.copy(
+                            voiceState = transition.state,
+                            voiceTranscript = "",
+                            notice = "말씀해 주세요 · 들은 문장을 바로 보여드릴게요",
+                            speechSettingsRequired = false,
+                            ttsPlaybackFailed = false,
+                        )
                     }
                     val locale = Locale.KOREA
                     when (stt.availability(locale)) {
@@ -256,9 +265,11 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
             mutableState.update {
                 it.copy(
                     voiceState = transition.state,
-                    notice = "휴대폰 기본 음성 입력으로 듣고 있어요",
+                    voiceTranscript = "",
+                    notice = "말씀해 주세요 · 들은 문장을 바로 보여드릴게요",
                     speechSettingsRequired = false,
                     systemSpeechFallbackAvailable = false,
+                    ttsPlaybackFailed = false,
                 )
             }
             collectSpeech(turnId, locale, systemStt)
@@ -286,34 +297,49 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         offlineModelRetryCount: Int,
     ) {
         var retryOnDevice = false
-        engine.recognize(turnId, locale).collect { event ->
-            when (event) {
-                is SttEvent.Partial -> mutableState.update { it.copy(draft = event.text, notice = "듣고 있어요") }
-                is SttEvent.Final -> {
-                    mutableState.update {
+        val completed = awaitSpeechRecognition(STT_RECOGNITION_TIMEOUT_MS) {
+            engine.recognize(turnId, locale).collect { event ->
+                when (event) {
+                    is SttEvent.Partial -> mutableState.update {
                         it.copy(
-                            draft = "",
-                            voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.SpeechAccepted(turnId)).state,
-                            notice = null,
+                            draft = event.text,
+                            voiceTranscript = event.text,
+                            notice = "듣고 있어요 · 아래 문장이 맞는지 확인해 주세요",
                         )
                     }
-                    requestAnswer(event.text, speak = true, turnId = turnId)
-                }
-                SttEvent.ModelDownloadRequired -> {
-                    if (engine !== stt) {
-                        failVoice("휴대폰 기본 음성 입력에서 한국어를 사용할 수 없어요")
-                    } else if (!canRetryOfflineModel(offlineModelRetryCount)) {
-                        failVoice(
-                            "오프라인 한국어 음성 모델을 사용할 수 없어요. 아래 버튼으로 계속할 수 있어요.",
-                            showSpeechSettings = true,
-                            showSystemFallback = true,
-                        )
-                    } else {
-                        retryOnDevice = requestKoreanSpeechModel(locale)
+                    is SttEvent.Final -> {
+                        mutableState.update {
+                            it.copy(
+                                draft = "",
+                                voiceTranscript = event.text,
+                                voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.SpeechAccepted(turnId)).state,
+                                notice = "‘${event.text.take(36)}’로 질문할게요",
+                            )
+                        }
+                        requestAnswer(event.text, speak = true, turnId = turnId)
                     }
+                    SttEvent.ModelDownloadRequired -> {
+                        if (engine !== stt) {
+                            failVoice("휴대폰 기본 음성 입력에서 한국어를 사용할 수 없어요")
+                        } else if (!canRetryOfflineModel(offlineModelRetryCount)) {
+                            failVoice(
+                                "오프라인 한국어 음성 모델을 사용할 수 없어요. 아래 버튼으로 계속할 수 있어요.",
+                                showSpeechSettings = true,
+                                showSystemFallback = true,
+                            )
+                        } else {
+                            retryOnDevice = requestKoreanSpeechModel(locale)
+                        }
+                    }
+                    is SttEvent.Failure -> failVoice(event.reason, showSystemFallback = engine === stt)
                 }
-                is SttEvent.Failure -> failVoice(event.reason, showSystemFallback = engine === stt)
             }
+        }
+        if (!completed && state.value.voiceState is VoiceState.Listening) {
+            failVoice(
+                "음성 인식이 오래 응답하지 않았어요. 다시 누르거나 휴대폰 음성 입력으로 계속해 주세요.",
+                showSystemFallback = engine === stt,
+            )
         }
         if (retryOnDevice && state.value.voiceState is VoiceState.Listening) {
             delay(OFFLINE_STT_READY_DELAY_MS)
@@ -323,7 +349,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun requestKoreanSpeechModel(locale: Locale): Boolean {
         mutableState.update { it.copy(notice = "한국어 음성 인식을 준비하고 있어요") }
-        val request = withTimeoutOrNull(30_000) { stt.requestLanguageModel(locale) } ?: SttModelRequest.Failed
+        val request = withTimeoutOrNull(STT_MODEL_REQUEST_TIMEOUT_MS) { stt.requestLanguageModel(locale) } ?: SttModelRequest.Failed
         return when (request) {
             SttModelRequest.Ready -> {
                 mutableState.update { it.copy(notice = "한국어 음성 인식 준비가 끝났어요") }
@@ -349,7 +375,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun awaitKoreanSpeechModel(locale: Locale): Boolean {
         mutableState.update { it.copy(notice = "한국어 음성 모델을 내려받고 있어요 · 끝내기를 누르면 취소돼요") }
-        repeat(45) {
+        repeat(STT_MODEL_READY_POLL_SECONDS) {
             delay(1_000)
             when (stt.availability(locale)) {
                 SttAvailability.Ready -> return true
@@ -379,6 +405,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         mutableState.update {
             it.copy(
                 voiceState = VoiceState.Idle,
+                voiceTranscript = "",
                 notice = null,
                 speechSettingsRequired = false,
                 systemSpeechFallbackAvailable = false,
@@ -485,7 +512,15 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     fun installTtsModel() {
         if (state.value.isDownloadingTts || state.value.ttsInstalled) return
         val request = SupertonicDownloadWorker.enqueue(getApplication())
-        mutableState.update { it.copy(isDownloadingTts = true, ttsDownloadProgress = 0, notice = "한국어 목소리 다운로드를 시작했어요") }
+        mutableState.update {
+            it.copy(
+                isDownloadingTts = true,
+                ttsDownloadProgress = 0,
+                notice = "한국어 목소리 다운로드를 시작했어요",
+                ttsSetupRequired = true,
+                ttsPlaybackFailed = false,
+            )
+        }
         observeTtsDownload(request.id)
     }
 
@@ -504,13 +539,9 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> {
-                        mutableState.update {
-                            it.copy(
-                                isDownloadingTts = false,
-                                ttsDownloadProgress = 100,
-                                ttsInstalled = modelResolver.resolveSupertonic() != null,
-                                notice = "한국어 목소리 설치가 끝났어요",
-                            )
+                        val installed = modelResolver.resolveSupertonic() != null
+                        mutableState.update { current ->
+                            current.afterTtsInstall(installed)
                         }
                         break
                     }
@@ -519,6 +550,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                             it.copy(
                                 isDownloadingTts = false,
                                 notice = info.outputData.getString(SupertonicDownloadWorker.KEY_ERROR) ?: "목소리 설치를 마치지 못했어요",
+                                ttsSetupRequired = true,
                             )
                         }
                         break
@@ -581,6 +613,9 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     private companion object {
         val ACTIVE_WORK_STATES = setOf(WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING, WorkInfo.State.BLOCKED)
         const val OFFLINE_STT_READY_DELAY_MS = 800L
+        const val STT_MODEL_REQUEST_TIMEOUT_MS = 8_000L
+        const val STT_MODEL_READY_POLL_SECONDS = 15
+        const val STT_RECOGNITION_TIMEOUT_MS = 30_000L
     }
 
     private fun requestAnswer(text: String, speak: Boolean, turnId: TurnId = TurnId.create()) {
@@ -853,34 +888,73 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         return true
     }
 
+    fun retryLastAnswerSpeech() {
+        if (state.value.isGenerating || state.value.voiceState is VoiceState.Listening) return
+        val text = state.value.messages.lastOrNull { it.role == Role.Assistant && it.text.isNotBlank() }?.text ?: return
+        cancelActiveAnswer()
+        val turnId = TurnId.create()
+        activeTurnId = turnId
+        mutableState.update {
+            it.copy(
+                voiceState = VoiceState.PreparingAnswer(turnId),
+                notice = "답변을 다시 읽을 준비를 하고 있어요",
+                ttsPlaybackFailed = false,
+            )
+        }
+        answerJob = viewModelScope.launch { speakAnswer(turnId, text) }
+    }
+
     private suspend fun speakAnswer(turnId: TurnId, text: String) {
         val ttsModel = modelResolver.resolveSupertonic()
         if (ttsModel == null) {
-            mutableState.update { it.copy(notice = "음성 모델이 없어 글로 답했어요.", ttsInstalled = false) }
-            finishAnswer(turnId)
+            finishAnswer(
+                turnId,
+                notice = "답변은 글로 표시했어요. 한국어 목소리를 받으면 다음부터 읽어드려요.",
+                ttsSetupRequired = true,
+            )
             return
-        }
-        if (!preparedTts) {
-            tts.prepare(ttsModel)
-            preparedTts = true
         }
         val generation = ++activePlaybackGeneration
         var started = false
-        tts.synthesize(turnId, text.take(500)).collect { chunk ->
-            if (activeTurnId != turnId) return@collect
-            if (!started) {
-                audioOutput.start(chunk.sampleRate, generation)
-                started = true
-                mutableState.update {
-                    it.copy(voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.PlaybackStarted(turnId, generation)).state, notice = null)
+        try {
+            mutableState.update { it.copy(notice = "답변을 음성으로 만들고 있어요") }
+            if (!preparedTts) {
+                tts.prepare(ttsModel)
+                preparedTts = true
+            }
+            speechChunks(text).forEach { speechText ->
+                tts.synthesize(turnId, speechText).collect { chunk ->
+                    if (activeTurnId != turnId) return@collect
+                    if (!started) {
+                        audioOutput.start(chunk.sampleRate, generation)
+                        started = true
+                        mutableState.update {
+                            it.copy(
+                                voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.PlaybackStarted(turnId, generation)).state,
+                                notice = "답변을 읽어드리고 있어요",
+                            )
+                        }
+                    }
+                    audioOutput.write(chunk, generation)
                 }
             }
-            audioOutput.write(chunk, generation)
-        }
-        if (started) audioOutput.finish(generation)
-        if (activeTurnId == turnId) {
-            mutableState.update { it.copy(voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.PlaybackCompleted(generation)).state) }
-            finishAnswer(turnId)
+            if (started) audioOutput.finish(generation)
+            if (activeTurnId == turnId) {
+                mutableState.update {
+                    it.copy(voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.PlaybackCompleted(generation)).state)
+                }
+                finishAnswer(turnId)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            preparedTts = false
+            runCatching { audioOutput.abort(generation) }
+            finishAnswer(
+                turnId,
+                notice = "답변은 글로 표시했지만 목소리 재생은 시작하지 못했어요.",
+                ttsPlaybackFailed = true,
+            )
         }
     }
 
@@ -903,11 +977,25 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         )
     }
 
-    private fun finishAnswer(turnId: TurnId) {
+    private fun finishAnswer(
+        turnId: TurnId,
+        notice: String? = null,
+        ttsSetupRequired: Boolean = false,
+        ttsPlaybackFailed: Boolean = false,
+    ) {
         if (activeTurnId != turnId) return
         activeTurnId = null
         answerJob = null
-        mutableState.update { it.copy(isGenerating = false, notice = null, voiceState = VoiceState.Idle) }
+        mutableState.update {
+            it.copy(
+                isGenerating = false,
+                voiceTranscript = "",
+                notice = notice,
+                voiceState = VoiceState.Idle,
+                ttsSetupRequired = ttsSetupRequired,
+                ttsPlaybackFailed = ttsPlaybackFailed,
+            )
+        }
     }
 
     private fun cancelActiveAnswer() {
@@ -973,6 +1061,57 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 }
 
 internal fun canRetryOfflineModel(retryCount: Int): Boolean = retryCount < 1
+
+internal suspend fun awaitSpeechRecognition(timeoutMs: Long, block: suspend () -> Unit): Boolean =
+    withTimeoutOrNull(timeoutMs) {
+        block()
+        true
+    } ?: false
+
+internal fun ChatUiState.afterTtsInstall(installed: Boolean): ChatUiState {
+    val canRetryLastAnswer = installed && ttsSetupRequired && messages.any {
+        it.role == Role.Assistant && it.text.isNotBlank()
+    }
+    return copy(
+        isDownloadingTts = false,
+        ttsDownloadProgress = if (installed) 100 else 0,
+        ttsInstalled = installed,
+        notice = if (installed) {
+            if (canRetryLastAnswer) "한국어 목소리 준비가 끝났어요. 아래 버튼으로 답변을 들어보세요."
+            else "한국어 목소리 준비가 끝났어요."
+        } else {
+            "목소리 설치를 확인하지 못했어요. 다시 받아 주세요."
+        },
+        ttsSetupRequired = !installed,
+        ttsPlaybackFailed = canRetryLastAnswer,
+    )
+}
+
+internal fun speechChunks(value: String, maxChars: Int = 420): List<String> {
+    require(maxChars in 80..SupertonicTtsEngine.MAX_TEXT_LENGTH)
+    val normalized = value
+        .replace(Regex("https?://\\S+"), "링크")
+        .replace(Regex("[*_`#>]"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    if (normalized.isBlank()) return emptyList()
+    val chunks = mutableListOf<String>()
+    var remaining = normalized
+    while (remaining.length > maxChars) {
+        val window = remaining.take(maxChars + 1)
+        val punctuation = window.indexOfLast { it in ".!?。！？" }
+        val whitespace = window.indexOfLast { it.isWhitespace() }
+        val boundary = when {
+            punctuation >= maxChars / 3 -> punctuation + 1
+            whitespace >= maxChars / 3 -> whitespace
+            else -> maxChars
+        }
+        chunks += remaining.take(boundary).trim()
+        remaining = remaining.drop(boundary).trimStart()
+    }
+    if (remaining.isNotBlank()) chunks += remaining
+    return chunks
+}
 
 internal suspend fun runSpeechRecognitionGuard(
     isOffline: Boolean,

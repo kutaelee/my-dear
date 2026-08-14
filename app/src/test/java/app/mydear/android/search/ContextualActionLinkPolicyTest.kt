@@ -53,4 +53,18 @@ class ContextualActionLinkPolicyTest {
         assertFalse(link.title.contains("김민수"))
         assertFalse(link.url.contains("%EA%B9%80%EB%AF%BC%EC%88%98"))
     }
+
+    @Test fun explicitNewTvRequestReplacesThePreviousAirFreshenerTopic() {
+        val link = ContextualActionLinkPolicy.create(
+            currentQuery = "티비 고장났는데 새로 사게 링크줘",
+            previousUserMessages = listOf("요즘 잘나가는 방향제 추천해줘", "가성비 제품으로 링크줘"),
+        )
+
+        requireNotNull(link)
+        assertEquals("TV 찾아보기", link.title)
+        assertTrue(link.url.contains("query=TV"))
+        assertFalse(link.title.contains("방향제"))
+        assertFalse(link.url.contains("%EB%B0%A9%ED%96%A5%EC%A0%9C"))
+        assertFalse(link.url.contains("%EA%B3%A0%EC%9E%A5"))
+    }
 }

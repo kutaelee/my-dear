@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
@@ -28,34 +29,36 @@ class SupertonicTtsEngine(
     private val activeTurn = AtomicReference<String?>(null)
     private var tts: OfflineTts? = null
 
-    override suspend fun prepare(model: InstalledModel) = lifecycleMutex.withLock {
-        val root = File(model.path).canonicalFile
-        require(root.isDirectory) { "Supertonic 모델 폴더를 찾을 수 없어요" }
-        val files = REQUIRED_FILES.associateWith { name ->
-            root.resolve(name).canonicalFile.also { file ->
-                require(file.parentFile == root && file.isFile) { "Supertonic 모델 파일이 빠졌어요: $name" }
-            }.absolutePath
-        }
-        tts?.release()
-        tts = OfflineTts(
-            config = OfflineTtsConfig(
-                model = OfflineTtsModelConfig(
-                    supertonic = OfflineTtsSupertonicModelConfig(
-                        durationPredictor = files.getValue("duration_predictor.int8.onnx"),
-                        textEncoder = files.getValue("text_encoder.int8.onnx"),
-                        vectorEstimator = files.getValue("vector_estimator.int8.onnx"),
-                        vocoder = files.getValue("vocoder.int8.onnx"),
-                        ttsJson = files.getValue("tts.json"),
-                        unicodeIndexer = files.getValue("unicode_indexer.bin"),
-                        voiceStyle = files.getValue("voice.bin"),
+    override suspend fun prepare(model: InstalledModel) = withContext(Dispatchers.Default) {
+        lifecycleMutex.withLock {
+            val root = File(model.path).canonicalFile
+            require(root.isDirectory) { "Supertonic 모델 폴더를 찾을 수 없어요" }
+            val files = REQUIRED_FILES.associateWith { name ->
+                root.resolve(name).canonicalFile.also { file ->
+                    require(file.parentFile == root && file.isFile) { "Supertonic 모델 파일이 빠졌어요: $name" }
+                }.absolutePath
+            }
+            tts?.release()
+            tts = OfflineTts(
+                config = OfflineTtsConfig(
+                    model = OfflineTtsModelConfig(
+                        supertonic = OfflineTtsSupertonicModelConfig(
+                            durationPredictor = files.getValue("duration_predictor.int8.onnx"),
+                            textEncoder = files.getValue("text_encoder.int8.onnx"),
+                            vectorEstimator = files.getValue("vector_estimator.int8.onnx"),
+                            vocoder = files.getValue("vocoder.int8.onnx"),
+                            ttsJson = files.getValue("tts.json"),
+                            unicodeIndexer = files.getValue("unicode_indexer.bin"),
+                            voiceStyle = files.getValue("voice.bin"),
+                        ),
+                        numThreads = numThreads.coerceIn(1, 4),
+                        debug = false,
+                        provider = "cpu",
                     ),
-                    numThreads = numThreads.coerceIn(1, 4),
-                    debug = false,
-                    provider = "cpu",
+                    maxNumSentences = 1,
                 ),
-                maxNumSentences = 1,
-            ),
-        )
+            )
+        }
     }
 
     override fun synthesize(turnId: TurnId, text: String): Flow<PcmChunk> = flow {

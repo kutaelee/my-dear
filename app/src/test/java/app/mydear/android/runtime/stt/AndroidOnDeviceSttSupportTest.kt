@@ -2,6 +2,8 @@ package app.mydear.android.runtime.stt
 
 import android.speech.SpeechRecognizer
 import app.mydear.android.domain.SttAvailability
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -66,5 +68,16 @@ class AndroidOnDeviceSttSupportTest {
 
         assertTrue(registry.isEmpty())
         assertEquals(1, closeCount)
+    }
+
+    @Test fun supportCallbackThatNeverReturnsFallsBackWithinTheBound() = runBlocking {
+        val result = boundedSpeechSupportCheck(
+            timeoutMs = 25,
+            fallback = SttAvailability.ModelDownloadRequired,
+        ) {
+            awaitCancellation()
+        }
+
+        assertEquals(SttAvailability.ModelDownloadRequired, result)
     }
 }

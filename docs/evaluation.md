@@ -1,5 +1,7 @@
 # Evaluation gates
 
+Preview 9 makes the complete voice handoff observable and bounded: live STT words are shown outside the input field in a three-line panel that leaves the composer reachable at 2× font scale, speech-support callbacks time out after four seconds, Korean model preparation and recognition have finite timeout windows, Supertonic initialization runs off the UI thread, missing or failed TTS keeps the written answer plus a fixed recovery action, long answers are spoken in bounded chunks, and a new TV request cannot inherit an older air-freshener topic. The pinned Supertonic pack was downloaded, synthesized, and written through AudioTrack on the AVD; injected Korean PCM was also routed through the production STT Flow and produced an explicit terminal result, but the AVD recognition service returned empty text, so semantic STT accuracy remains a real-microphone device check rather than a claimed automated pass.
+
 ## Automated release gates
 
 아래 표는 스토어 배포 전 최종 합격 기준이다. 현재 저장소에서 실행한 증거와 실기기 전용 항목은 이어지는 절에 분리해 기록한다.

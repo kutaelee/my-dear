@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,6 +33,7 @@ import kotlin.coroutines.resume
 class AndroidOnDeviceSttEngine(
     context: Context,
     private val useSystemSpeechService: Boolean = false,
+    private val configureRecognitionIntent: (Intent) -> Unit = {},
 ) : SpeechToTextEngine {
     private val appContext = context.applicationContext
     private val active = ConcurrentHashMap<TurnId, SpeechRecognizer>()
@@ -47,7 +49,10 @@ class AndroidOnDeviceSttEngine(
         }
         if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) return@withContext SttAvailability.Unsupported
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@withContext SttAvailability.Ready
-        checkLanguageSupport(locale)
+        boundedSpeechSupportCheck(
+            timeoutMs = SUPPORT_CHECK_TIMEOUT_MS,
+            fallback = SttAvailability.ModelDownloadRequired,
+        ) { checkLanguageSupport(locale) }
     }
 
     override suspend fun requestLanguageModel(locale: Locale): SttModelRequest = withContext(Dispatchers.Main.immediate) {
@@ -153,6 +158,7 @@ class AndroidOnDeviceSttEngine(
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, !useSystemSpeechService)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        configureRecognitionIntent(this)
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -249,6 +255,10 @@ class AndroidOnDeviceSttEngine(
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "잠시 후 다시 말씀해 주세요."
         else -> "오프라인 음성 인식을 시작하지 못했어요."
     }
+
+    private companion object {
+        const val SUPPORT_CHECK_TIMEOUT_MS = 4_000L
+    }
 }
 
 internal fun resolveLanguageSupport(
@@ -267,6 +277,9 @@ internal fun resolveLanguageSupport(
 internal fun resolveLanguageSupportError(error: Int?): SttAvailability =
     if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) SttAvailability.Unsupported
     else SttAvailability.ModelDownloadRequired
+
+internal suspend fun <T> boundedSpeechSupportCheck(timeoutMs: Long, fallback: T, block: suspend () -> T): T =
+    withTimeoutOrNull(timeoutMs) { block() } ?: fallback
 
 internal fun Collection<String>.supportsLanguage(locale: Locale): Boolean = any { tag ->
     val candidate = Locale.forLanguageTag(tag.replace('_', '-'))

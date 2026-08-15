@@ -198,6 +198,53 @@ class ChatScreenStateTest {
         rule.onNodeWithTag("voice-stop").assertIsDisplayed()
     }
 
+    @Test fun activeVoiceConversationKeepsAnEndControlDuringTheRelistenGap() {
+        rule.setContent {
+            MaterialTheme {
+                ChatScreen(
+                    padding = PaddingValues(),
+                    state = ChatUiState(
+                        voiceState = VoiceState.Idle,
+                        voiceConversationActive = true,
+                        notice = "답변을 마쳤어요 · 계속 말씀해 주세요",
+                    ),
+                    onDraftChange = {},
+                    onSend = {},
+                    onQuickPrompt = {},
+                    onVoiceClick = {},
+                    onVoiceCancel = {},
+                    onUseSystemSpeech = {},
+                    screenShareState = ScreenShareState.Inactive,
+                    onScreenShareClick = {},
+                    onUseOverAnotherApp = {},
+                    onOpenSpeechSettings = {},
+                )
+            }
+        }
+
+        rule.onNodeWithText("답변을 마쳤어요 · 계속 말씀해 주세요").assertIsDisplayed()
+        rule.onNodeWithTag("voice-stop").assertIsDisplayed()
+        rule.onNodeWithTag("voice-control").assertIsDisplayed()
+    }
+
+    @Test fun pictureInPictureRelistenGapShowsAndExecutesEndVoiceMode() {
+        var stopped = false
+        rule.setContent {
+            MaterialTheme {
+                PictureInPictureAssistant(
+                    voiceState = VoiceState.Idle,
+                    voiceConversationActive = true,
+                    onVoiceClick = {},
+                    onVoiceCancel = { stopped = true },
+                )
+            }
+        }
+
+        rule.onNodeWithText("곧 다시 들을게요 · 끝내기").assertIsDisplayed()
+        rule.onNodeWithTag("pip-voice-control").assertIsDisplayed().performClick()
+        rule.runOnIdle { assertTrue(stopped) }
+    }
+
     @Test fun longLiveTranscriptAtDoubleFontScaleDoesNotPushComposerControlsOffScreen() {
         rule.setContent {
             val currentDensity = LocalDensity.current

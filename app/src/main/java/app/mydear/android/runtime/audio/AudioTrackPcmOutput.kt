@@ -3,6 +3,7 @@ package app.mydear.android.runtime.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.SystemClock
 import app.mydear.android.domain.PcmChunk
 import app.mydear.android.domain.PcmOutput
 import kotlinx.coroutines.delay
@@ -79,7 +80,12 @@ class AudioTrackPcmOutput : PcmOutput {
 
     override suspend fun finish(generation: Long) {
         val target = mutex.withLock { owned?.takeIf { it.generation == generation } ?: return }
-        repeat(100) {
+        val playedAtFinish = target.track.playbackHeadPosition.toLong().coerceAtLeast(0)
+        val deadline = SystemClock.elapsedRealtime() + playbackDrainTimeoutMillis(
+            framesRemaining = (target.framesWritten - playedAtFinish).coerceAtLeast(0),
+            sampleRate = target.sampleRate,
+        )
+        while (SystemClock.elapsedRealtime() <= deadline) {
             val completed = mutex.withLock {
                 owned !== target || target.track.playbackHeadPosition.toLong() >= target.framesWritten
             }
@@ -108,4 +114,11 @@ class AudioTrackPcmOutput : PcmOutput {
     }
 
     companion object { const val MAX_CHUNK_SAMPLES = 48_000 * 2 }
+}
+
+internal fun playbackDrainTimeoutMillis(framesRemaining: Long, sampleRate: Int): Long {
+    require(framesRemaining >= 0)
+    require(sampleRate > 0)
+    val remainingAudioMillis = framesRemaining * 1_000L / sampleRate
+    return (remainingAudioMillis + 1_500L).coerceIn(2_000L, 60_000L)
 }

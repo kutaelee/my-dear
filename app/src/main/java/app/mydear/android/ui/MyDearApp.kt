@@ -239,6 +239,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     if (isPictureInPicture) {
         PictureInPictureAssistant(
             voiceState = chatState.voiceState,
+            voiceConversationActive = chatState.voiceConversationActive,
             onVoiceClick = onVoiceClick,
             onVoiceCancel = chatViewModel::stopVoiceMode,
         )
@@ -577,7 +578,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 }
             }
             state.notice?.takeIf {
-                !state.isGenerating && state.voiceState is VoiceState.Idle
+                !state.isGenerating && state.voiceState is VoiceState.Idle && !state.voiceConversationActive
             }?.let { notice ->
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -652,10 +653,11 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                 )
                 ScreenShareState.Inactive -> Unit
             }
-            if (state.voiceState !is VoiceState.Idle) {
+            if (state.voiceState !is VoiceState.Idle || state.voiceConversationActive) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        state.notice?.takeIf(String::isNotBlank) ?: VoiceReducer.accessibleLabel(state.voiceState),
+                        state.notice?.takeIf(String::isNotBlank)
+                            ?: if (state.voiceConversationActive) "음성 대화를 계속하고 있어요" else VoiceReducer.accessibleLabel(state.voiceState),
                         color = Coral,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -664,7 +666,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
                     TextButton(onClick = onVoiceCancel, modifier = Modifier.heightIn(min = 44.dp).testTag("voice-stop")) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(if (state.voiceState is VoiceState.Failed) "닫기" else "끝내기")
+                        Text(if (state.voiceConversationActive || state.voiceState !is VoiceState.Failed) "끝내기" else "닫기")
                     }
                 }
             }
@@ -759,12 +761,12 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 IconButton(
                     onClick = onVoiceClick,
-                    modifier = Modifier.size(50.dp).background(if (state.voiceState is VoiceState.Idle) Color(0xFFF4EFEC) else MaterialTheme.colorScheme.primaryContainer, CircleShape).testTag("voice-control"),
+                    modifier = Modifier.size(50.dp).background(if (!state.voiceConversationActive && state.voiceState is VoiceState.Idle) Color(0xFFF4EFEC) else MaterialTheme.colorScheme.primaryContainer, CircleShape).testTag("voice-control"),
                 ) {
                     Icon(
                         if (state.voiceState is VoiceState.Listening) Icons.Default.Stop else Icons.Default.Mic,
-                        contentDescription = VoiceReducer.accessibleLabel(state.voiceState),
-                        tint = if (state.voiceState is VoiceState.Idle) WarmInk else Coral,
+                        contentDescription = if (state.voiceConversationActive && state.voiceState is VoiceState.Idle) "계속 듣기" else VoiceReducer.accessibleLabel(state.voiceState),
+                        tint = if (!state.voiceConversationActive && state.voiceState is VoiceState.Idle) WarmInk else Coral,
                     )
                 }
                 OutlinedTextField(
@@ -806,11 +808,14 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     }
 }
 
-@Composable private fun PictureInPictureAssistant(
+@Composable internal fun PictureInPictureAssistant(
     voiceState: VoiceState,
+    voiceConversationActive: Boolean,
     onVoiceClick: () -> Unit,
     onVoiceCancel: () -> Unit,
 ) {
+    val waitingToRelisten = voiceConversationActive && voiceState is VoiceState.Idle
+    val endsVoiceMode = voiceState is VoiceState.Listening || voiceState is VoiceState.Failed || waitingToRelisten
     Surface(color = WarmIvory, modifier = Modifier.fillMaxSize().testTag("picture-in-picture-assistant")) {
         Column(
             modifier = Modifier.fillMaxSize().padding(12.dp),
@@ -820,21 +825,26 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
             Text("내새끼", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
             Spacer(Modifier.height(6.dp))
             IconButton(
-                onClick = if (voiceState is VoiceState.Listening || voiceState is VoiceState.Failed) onVoiceCancel else onVoiceClick,
+                onClick = if (endsVoiceMode) onVoiceCancel else onVoiceClick,
                 modifier = Modifier
                     .size(64.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+                    .testTag("pip-voice-control"),
             ) {
                 Icon(
-                    if (voiceState is VoiceState.Listening) Icons.Default.Stop else Icons.Default.Mic,
-                    contentDescription = VoiceReducer.accessibleLabel(voiceState),
+                    if (voiceState is VoiceState.Listening || waitingToRelisten) Icons.Default.Stop else Icons.Default.Mic,
+                    contentDescription = if (waitingToRelisten) "음성 대화 끝내기" else VoiceReducer.accessibleLabel(voiceState),
                     tint = Coral,
                     modifier = Modifier.size(32.dp),
                 )
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                if (voiceState is VoiceState.Idle) "눌러서 질문" else VoiceReducer.accessibleLabel(voiceState),
+                when {
+                    waitingToRelisten -> "곧 다시 들을게요 · 끝내기"
+                    voiceState is VoiceState.Idle -> "눌러서 질문"
+                    else -> VoiceReducer.accessibleLabel(voiceState)
+                },
                 fontSize = 12.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

@@ -53,6 +53,8 @@ import app.mydear.android.voice.VoiceEvent
 import app.mydear.android.voice.VoiceReducer
 import app.mydear.android.voice.VoiceState
 import app.mydear.android.voice.HalfDuplexGate
+import app.mydear.android.voice.VoiceConversationSession
+import app.mydear.android.voice.VoiceInputRoute
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,6 +98,7 @@ data class ChatUiState(
     val systemSpeechFallbackAvailable: Boolean = false,
     val ttsSetupRequired: Boolean = false,
     val ttsPlaybackFailed: Boolean = false,
+    val voiceConversationActive: Boolean = false,
 )
 
 class VoiceChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -136,6 +139,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     private var activeTurnId: TurnId? = null
     private var activePlaybackGeneration = 0L
     private val halfDuplexGate = HalfDuplexGate()
+    private val voiceConversation = VoiceConversationSession()
     private val consumedToolNonces = LinkedHashSet<String>()
 
     init {
@@ -199,11 +203,15 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
     fun sendDraft() {
         val text = state.value.draft.trim()
         if (text.isEmpty()) return
+        if (voiceConversation.isActive) stopVoiceMode()
         requestAnswer(text, speak = false)
         mutableState.update { it.copy(draft = "") }
     }
 
-    fun sendQuickPrompt(text: String) = requestAnswer(text.take(500), speak = false)
+    fun sendQuickPrompt(text: String) {
+        if (voiceConversation.isActive) stopVoiceMode()
+        requestAnswer(text.take(500), speak = false)
+    }
 
     fun beginVoiceCapture() {
         val current = state.value.voiceState
@@ -211,6 +219,16 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
             cancelVoice()
             return
         }
+        val route = voiceConversation.route ?: VoiceInputRoute.OnDevice.also(voiceConversation::start)
+        launchVoiceCapture(route)
+    }
+
+    fun beginSystemVoiceCapture() {
+        voiceConversation.start(VoiceInputRoute.System)
+        launchVoiceCapture(VoiceInputRoute.System)
+    }
+
+    private fun launchVoiceCapture(route: VoiceInputRoute) {
         val previousAnswer = detachActiveAnswer()
         listeningJob?.cancel()
         listeningJob = viewModelScope.launch {
@@ -221,58 +239,45 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                 cancelSynthesis = { if (previousTurn != null) tts.cancel(previousTurn) },
                 abortPlayback = { if (previousGeneration != null) audioOutput.abort(previousGeneration) },
                 startRecognition = {
+                    if (!voiceConversation.isActive || voiceConversation.route != route) return@beginListening
                     val turnId = TurnId.create()
                     val transition = VoiceReducer.reduce(state.value.voiceState, VoiceEvent.StartListening(turnId))
                     mutableState.update {
                         it.copy(
                             voiceState = transition.state,
+                            voiceConversationActive = true,
                             voiceTranscript = "",
                             notice = "말씀해 주세요 · 들은 문장을 바로 보여드릴게요",
                             speechSettingsRequired = false,
+                            systemSpeechFallbackAvailable = false,
                             ttsPlaybackFailed = false,
                         )
                     }
                     val locale = Locale.KOREA
-                    when (stt.availability(locale)) {
-                        SttAvailability.Ready -> collectSpeech(turnId, locale, stt)
-                        SttAvailability.ModelDownloadRequired -> {
-                            if (requestKoreanSpeechModel(locale)) {
-                                delay(OFFLINE_STT_READY_DELAY_MS)
-                                collectSpeech(turnId, locale, stt, offlineModelRetryCount = 1)
-                            }
+                    if (route == VoiceInputRoute.System) {
+                        if (systemStt.availability(locale) != SttAvailability.Ready) {
+                            failVoice("휴대폰의 기본 음성 입력 서비스를 사용할 수 없어요.")
+                        } else {
+                            collectSpeech(turnId, locale, systemStt)
                         }
-                        SttAvailability.Unsupported -> failVoice(
-                            "이 휴대폰의 오프라인 음성 인식에서 한국어를 지원하지 않아요. 글로는 계속 이용할 수 있어요.",
-                            showSpeechSettings = true,
-                            showSystemFallback = true,
-                        )
+                    } else {
+                        when (stt.availability(locale)) {
+                            SttAvailability.Ready -> collectSpeech(turnId, locale, stt)
+                            SttAvailability.ModelDownloadRequired -> {
+                                if (requestKoreanSpeechModel(locale)) {
+                                    delay(OFFLINE_STT_READY_DELAY_MS)
+                                    collectSpeech(turnId, locale, stt, offlineModelRetryCount = 1)
+                                }
+                            }
+                            SttAvailability.Unsupported -> failVoice(
+                                "이 휴대폰의 오프라인 음성 인식에서 한국어를 지원하지 않아요. 글로는 계속 이용할 수 있어요.",
+                                showSpeechSettings = true,
+                                showSystemFallback = true,
+                            )
+                        }
                     }
                 },
             )
-        }
-    }
-
-    fun beginSystemVoiceCapture() {
-        stopVoiceMode()
-        listeningJob = viewModelScope.launch {
-            val locale = Locale.KOREA
-            if (systemStt.availability(locale) != SttAvailability.Ready) {
-                failVoice("휴대폰의 기본 음성 입력 서비스를 사용할 수 없어요.")
-                return@launch
-            }
-            val turnId = TurnId.create()
-            val transition = VoiceReducer.reduce(state.value.voiceState, VoiceEvent.StartListening(turnId))
-            mutableState.update {
-                it.copy(
-                    voiceState = transition.state,
-                    voiceTranscript = "",
-                    notice = "말씀해 주세요 · 들은 문장을 바로 보여드릴게요",
-                    speechSettingsRequired = false,
-                    systemSpeechFallbackAvailable = false,
-                    ttsPlaybackFailed = false,
-                )
-            }
-            collectSpeech(turnId, locale, systemStt)
         }
     }
 
@@ -399,12 +404,17 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun cancelVoice() {
         val turnId = (state.value.voiceState as? VoiceState.Listening)?.turnId
+        val route = voiceConversation.route
+        voiceConversation.stop()
         listeningJob?.cancel()
         listeningJob = null
-        if (turnId != null) viewModelScope.launch { stt.cancel(turnId) }
+        if (turnId != null) viewModelScope.launch {
+            if (route == VoiceInputRoute.System) systemStt.cancel(turnId) else stt.cancel(turnId)
+        }
         mutableState.update {
             it.copy(
                 voiceState = VoiceState.Idle,
+                voiceConversationActive = false,
                 voiceTranscript = "",
                 notice = null,
                 speechSettingsRequired = false,
@@ -616,6 +626,7 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         const val STT_MODEL_REQUEST_TIMEOUT_MS = 8_000L
         const val STT_MODEL_READY_POLL_SECONDS = 15
         const val STT_RECOGNITION_TIMEOUT_MS = 30_000L
+        const val VOICE_RELISTEN_DELAY_MS = 450L
     }
 
     private fun requestAnswer(text: String, speak: Boolean, turnId: TurnId = TurnId.create()) {
@@ -640,9 +651,13 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     it.copy(
                         messages = it.messages + user + ChatMessage(assistantId, Role.Assistant, response),
                         pendingTool = proposal,
-                        notice = null,
-                        voiceState = VoiceState.Idle,
+                        notice = if (speak) "답변을 읽을 준비를 하고 있어요" else null,
+                        voiceState = if (speak) VoiceState.PreparingAnswer(turnId) else VoiceState.Idle,
                     )
+                }
+                if (speak) {
+                    activeTurnId = turnId
+                    answerJob = viewModelScope.launch { speakAnswer(turnId, response) }
                 }
                 return
             }
@@ -938,12 +953,13 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
                     audioOutput.write(chunk, generation)
                 }
             }
+            check(started) { "음성 데이터를 만들지 못했어요" }
             if (started) audioOutput.finish(generation)
             if (activeTurnId == turnId) {
                 mutableState.update {
                     it.copy(voiceState = VoiceReducer.reduce(it.voiceState, VoiceEvent.PlaybackCompleted(generation)).state)
                 }
-                finishAnswer(turnId)
+                finishAnswer(turnId, resumeListening = true)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -982,19 +998,38 @@ class VoiceChatViewModel(application: Application) : AndroidViewModel(applicatio
         notice: String? = null,
         ttsSetupRequired: Boolean = false,
         ttsPlaybackFailed: Boolean = false,
+        resumeListening: Boolean = false,
     ) {
         if (activeTurnId != turnId) return
+        val nextRoute = if (resumeListening) {
+            voiceConversation.nextRouteAfterPlayback(playbackCompleted = true)
+        } else {
+            voiceConversation.nextRouteAfterPlayback(playbackCompleted = false)
+            null
+        }
         activeTurnId = null
         answerJob = null
         mutableState.update {
             it.copy(
                 isGenerating = false,
                 voiceTranscript = "",
-                notice = notice,
+                notice = if (nextRoute != null) "답변을 마쳤어요 · 계속 말씀해 주세요" else notice,
                 voiceState = VoiceState.Idle,
+                voiceConversationActive = nextRoute != null,
                 ttsSetupRequired = ttsSetupRequired,
                 ttsPlaybackFailed = ttsPlaybackFailed,
             )
+        }
+        if (nextRoute != null) {
+            viewModelScope.launch {
+                voiceConversation.resumeSelectedRoute(
+                    delayMillis = VOICE_RELISTEN_DELAY_MS,
+                    canStart = {
+                        activeTurnId == null && state.value.voiceState is VoiceState.Idle
+                    },
+                    start = ::launchVoiceCapture,
+                )
+            }
         }
     }
 

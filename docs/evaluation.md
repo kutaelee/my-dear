@@ -1,5 +1,7 @@
 # Evaluation gates
 
+Preview 10 keeps half-duplex voice mode active across turns. When the user chooses Android's default speech input after offline Korean preparation fails, that route remains selected for `STT → answer → TTS → relisten` until the user presses `끝내기`. Playback now drains according to the remaining PCM duration instead of releasing AudioTrack after a fixed two seconds, and the relisten gap keeps an explicit end control visible. Automatic relistening stops on missing or failed TTS so the app never listens while an unheard written-only answer is on screen.
+
 Preview 9 makes the complete voice handoff observable and bounded: live STT words are shown outside the input field in a three-line panel that leaves the composer reachable at 2× font scale, speech-support callbacks time out after four seconds, Korean model preparation and recognition have finite timeout windows, Supertonic initialization runs off the UI thread, missing or failed TTS keeps the written answer plus a fixed recovery action, long answers are spoken in bounded chunks, and a new TV request cannot inherit an older air-freshener topic. The pinned Supertonic pack was downloaded, synthesized, and written through AudioTrack on the AVD; injected Korean PCM was also routed through the production STT Flow and produced an explicit terminal result, but the AVD recognition service returned empty text, so semantic STT accuracy remains a real-microphone device check rather than a claimed automated pass.
 
 ## Automated release gates
